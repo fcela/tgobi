@@ -3,11 +3,9 @@
 A modern TypeScript port of [ggobi](https://ggobi.org/) — interactive
 visualisation of high-dimensional data, in your browser.
 
-Status: **M4+ (tour engine + projection pursuit)** complete — the
-projection moves. 1D and 2D tours of any subset of numeric variables are
-animated in a Web Worker, with a variable-circle widget, saved views, and
-projection-pursuit goals for Holes, Central Mass, PCA variance, and
-Kurtosis, plus LDA when a categorical class variable is available.
+## Install from npm
+
+Coming soon
 
 ## Develop
 
@@ -62,30 +60,6 @@ You can also pass a `DataFrame`-compatible object as `data`:
 ```tsx
 <Tgobi data={myDataFrame} />
 ```
-
-## Publish To npm
-
-1. Decide the package name. This repo is configured as `tgobi`, but you should verify that name is available on npm; if not, change `package.json` to a scoped name such as `@fcela/tgobi`.
-2. Add or confirm the license metadata before publishing.
-3. Run the release checks:
-
-```bash
-npm run typecheck
-npm test
-npm run test:e2e
-npm run build
-npm run pack:check
-```
-
-4. Log in and publish:
-
-```bash
-npm login
-npm publish --access public
-```
-
-For a scoped private package, use your organization scope and omit
-`--access public` if your npm plan supports private packages.
 
 ## Try it
 
