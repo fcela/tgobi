@@ -1,0 +1,75 @@
+{
+  "name": "tgobi",
+  "private": false,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Interactive high-dimensional data visualization in the browser.",
+  "license": "MIT",
+  "keywords": [
+    "ggobi",
+    "visualization",
+    "grand-tour",
+    "projection-pursuit",
+    "react"
+  ],
+  "bin": {
+    "tgobi": "./bin/tgobi.js"
+  },
+  "main": "./dist-lib/tgobi.umd.cjs",
+  "module": "./dist-lib/tgobi.js",
+  "types": "./dist-lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-lib/types/index.d.ts",
+      "import": "./dist-lib/tgobi.js",
+      "require": "./dist-lib/tgobi.umd.cjs"
+    },
+    "./styles.css": "./dist-lib/tgobi.css"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "dist-lib",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run build:app && npm run build:lib",
+    "build:app": "tsc -b && vite build",
+    "build:lib": "tsc -p tsconfig.lib.json && vite build --config vite.lib.config.ts",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "pack:check": "npm pack --dry-run",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "papaparse": "^5.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "regl": "^2.1.1",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^25.6.2",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@vitest/ui": "^4.1.5",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.6.0",
+    "vite": "^8.0.11",
+    "vitest": "^4.1.5"
+  }
+}
