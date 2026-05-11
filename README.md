@@ -6,7 +6,7 @@ visualisation of high-dimensional data, in your browser.
 ## Install from npm
 
 ```bash
-npm install tgobi
+npm install -g tgobi
 ```
 
 ## Develop
