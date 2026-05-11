@@ -11,7 +11,7 @@ const SAMPLES = [
   { label: "places", url: "/samples/places.csv" },
   { label: "cycle", url: "/samples/cycle.xml" },
   { label: "large", url: "/samples/synthetic-large.csv" },
-  { label: "250k", url: "/samples/cluster250k.csv" },
+
 ];
 
 export function EmptyState({ onLoaded }: EmptyStateProps) {
