@@ -48,6 +48,52 @@ export interface HullOverlay {
   }>;
 }
 
+export interface ContourOverlay {
+  grid: Float64Array;
+  paint: Uint8Array;
+  resolution: number;
+  nVars: number;
+  mins: Float64Array;
+  maxs: Float64Array;
+  paintPalette: ReadonlyArray<string>;
+  alpha: number;
+}
+
+export interface DensityOverlay {
+  contours: ReadonlyArray<{
+    paths: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>;
+    color: string;
+    alpha: number;
+  }>;
+}
+
+export interface BiplotOverlay {
+  arrows: ReadonlyArray<{
+    x: number;
+    y: number;
+    label: string;
+  }>;
+  color: string;
+  alpha: number;
+}
+
+export interface RugOverlay {
+  x: Float64Array | Int32Array;
+  y: Float64Array | Int32Array;
+  xMissing: Uint8Array;
+  yMissing: Uint8Array;
+  color: string;
+  alpha: number;
+  length: number;
+}
+
+export interface LoessOverlay {
+  points: ReadonlyArray<{ x: number; y: number }>;
+  color: string;
+  alpha: number;
+  width: number;
+}
+
 export interface ScatterRenderer {
   attach(canvas: HTMLCanvasElement): void;
   setData(
@@ -65,6 +111,11 @@ export interface ScatterRenderer {
     activeBrush: BrushOverlay | null,
     edgeOverlay?: EdgeOverlay | null,
     hullOverlay?: HullOverlay | null,
+    contourOverlay?: ContourOverlay | null,
+    densityOverlay?: DensityOverlay | null,
+    biplotOverlay?: BiplotOverlay | null,
+    rugOverlay?: RugOverlay | null,
+    loessOverlay?: LoessOverlay | null,
   ): void;
   transform(): ScatterTransform;
   detach(): void;

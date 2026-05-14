@@ -40,7 +40,12 @@ stopTour: () =>
 
   setTourSpeed: (speed) => set((s) => ({ tour: { ...s.tour, speed } })),
   setTourShape: (shape: TourShape) => set((s) => ({ tour: { ...s.tour, shape } })),
-  setTourMode: (mode: "grand" | "pp" | "manual") => set((s) => ({ tour: { ...s.tour, mode, ppValue: null } })),
+  setTourMode: (mode: "grand" | "pp" | "manual") => set((s) => {
+    if (mode !== "manual") {
+      return { tour: { ...s.tour, mode, ppValue: null, frozenVars: [], manualVar: null, manualValue: 0 } };
+    }
+    return { tour: { ...s.tour, mode, ppValue: null } };
+  }),
   setTourPpIndex: (ppIndex) => set((s) => ({ tour: { ...s.tour, ppIndex, ppValue: null } })),
   setTourActiveVars: (vars) => set((s) => {
     const manualVar = s.tour.manualVar && vars.includes(s.tour.manualVar) ? s.tour.manualVar : null;

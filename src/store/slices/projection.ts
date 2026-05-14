@@ -79,6 +79,7 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
 
     set((s) => ({ projection: { ...s.projection, running: true, error: null } }));
 
+    setTimeout(() => {
     try {
       const rows: number[] = [];
       for (let i = 0; i < df.nrow; i++) {
@@ -158,6 +159,7 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
         },
       }));
     }
+    }, 0);
   },
 
   materializeProjection: () => {

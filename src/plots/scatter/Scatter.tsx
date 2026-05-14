@@ -3,7 +3,12 @@ import { Canvas2DScatterRenderer } from "@/plots/scatter/canvas2dRenderer";
 import { Regl2DScatterRenderer } from "@/plots/scatter/regl2dRenderer";
 import type { ScatterPanel } from "@/store/types";
 import type {
+  BiplotOverlay,
+  ContourOverlay,
+  DensityOverlay,
   HullOverlay,
+  LoessOverlay,
+  RugOverlay,
   ScatterRenderState,
   ScatterRenderer,
   ScatterTransform,
@@ -32,6 +37,8 @@ import { getPalette } from "@/lib/color/palettes";
 import { formatRowLabel } from "@/lib/data/format";
 import { resolveScaledValues } from "@/lib/data/resolveScaling";
 import { convexHull } from "@/lib/geometry/convexHull";
+import { kde2d, computeContourLevels, marchingSquares } from "@/lib/stats/kde2d";
+import { loess } from "@/lib/stats/loess";
 
 const FIXED_FALLBACK = "#88c";
 const EDGE_NODE_HIT_RADIUS = 14;
@@ -70,6 +77,8 @@ export function Scatter({ panel }: ScatterProps) {
   const tourProj = useAppStore((s) => s.tour.proj);
   const tourActivePanelId = useAppStore((s) => s.tour.activePanelId);
   const tourShape = useAppStore((s) => s.tour.shape);
+  const classification = useAppStore((s) => s.classification);
+  const projection = useAppStore((s) => s.projection);
 
   const isTourActive =
     tourActivePanelId === panel.id &&
@@ -88,6 +97,9 @@ export function Scatter({ panel }: ScatterProps) {
   const [labels, setLabels] = useState<Array<{ i: number; x: number; y: number; label: string }>>([]);
   const [alpha, setAlpha] = useState<number | null>(null);
   const [pointSize, setPointSize] = useState(DEFAULT_POINT_SIZE);
+  const [showDensity, setShowDensity] = useState(false);
+  const [showRug, setShowRug] = useState(false);
+  const [showLoess, setShowLoess] = useState(false);
   const [localViewport, setLocalViewport] = useState<ScatterViewport | null>(panel.viewport ?? null);
   const viewport = Object.prototype.hasOwnProperty.call(panel, "viewport")
     ? panel.viewport ?? null
@@ -130,6 +142,117 @@ export function Scatter({ panel }: ScatterProps) {
   }, [df, colorState.encoding, colorState.palette]);
 
   const paintPalette = useMemo(() => getPalette(colorState.palette), [colorState.palette]);
+
+  const contourOverlay = useMemo((): ContourOverlay | null => {
+    const { boundaryPaint, boundaryGrid, gridSize, boundaryMins, boundaryMaxs, variables } = classification;
+    if (!boundaryPaint || !boundaryGrid || gridSize === 0 || !boundaryMins || !boundaryMaxs) return null;
+    if (variables.length < 2) return null;
+    if (variables[0] !== panel.x || variables[1] !== panel.y) return null;
+    if (isTourActive) return null;
+    return {
+      grid: boundaryGrid,
+      paint: boundaryPaint,
+      resolution: classification.gridResolution,
+      nVars: variables.length,
+      mins: boundaryMins,
+      maxs: boundaryMaxs,
+      paintPalette,
+      alpha: 0.18,
+    };
+  }, [classification.boundaryPaint, classification.boundaryGrid, classification.gridSize, classification.boundaryMins, classification.boundaryMaxs, classification.gridResolution, classification.variables, panel.x, panel.y, paintPalette, isTourActive]);
+
+  const densityOverlay = useMemo((): DensityOverlay | null => {
+    if (!showDensity || isTourActive || !xCol || !yCol || !xScaled || !yScaled) return null;
+    if ((xCol.type !== "numeric" && xCol.type !== "integer") || (yCol.type !== "numeric" && yCol.type !== "integer")) return null;
+    const kde = kde2d(xScaled.values, yScaled.values, xScaled.missingBuffer, yScaled.missingBuffer, selection.shadow, 50);
+    if (!kde) return null;
+    const levels = computeContourLevels(kde, 5);
+    const contours: Array<{ paths: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>; color: string; alpha: number }> = [];
+    const colors = ["#264653", "#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261"];
+    for (let li = 0; li < levels.length; li++) {
+      const paths = marchingSquares(kde, levels[li]!);
+      if (paths.length === 0) continue;
+      contours.push({
+        paths,
+        color: colors[li % colors.length] ?? "#6cf",
+        alpha: 0.6,
+      });
+    }
+    return contours.length > 0 ? { contours } : null;
+  }, [showDensity, isTourActive, xCol, yCol, xScaled, yScaled, selection.shadow]);
+
+  const biplotOverlay = useMemo((): BiplotOverlay | null => {
+    if (isTourActive) return null;
+    const { method, variables, loadings, nComponents, dimX, dimY, embedding } = projection;
+    if (!loadings || method !== "pca") return null;
+    if (embedding) return null;
+    if (panel.x !== `PC${dimX + 1}` || panel.y !== `PC${dimY + 1}`) {
+      if (!panel.x.startsWith("PC") || !panel.y.startsWith("PC")) return null;
+    }
+    const p = variables.length;
+    const k = nComponents;
+    if (p === 0 || k < 2) return null;
+    let compX = dimX;
+    let compY = dimY;
+    const xMatch = panel.x.match(/PC(\d+)/);
+    const yMatch = panel.y.match(/PC(\d+)/);
+    if (xMatch && yMatch) {
+      compX = parseInt(xMatch[1]!) - 1;
+      compY = parseInt(yMatch[1]!) - 1;
+    }
+    if (compX >= k || compY >= k) return null;
+    const arrows: Array<{ x: number; y: number; label: string }> = [];
+    let maxLen = 0;
+    for (let j = 0; j < p; j++) {
+      const lx = loadings[j * k + compX]!;
+      const ly = loadings[j * k + compY]!;
+      maxLen = Math.max(maxLen, Math.hypot(lx, ly));
+    }
+    if (maxLen === 0) return null;
+    const r = rendererRef.current;
+    let scale = 1;
+    if (r) {
+      const bounds = r.getDataBounds();
+      const rangeX = bounds.xMax - bounds.xMin;
+      const rangeY = bounds.yMax - bounds.yMin;
+      const maxRange = Math.max(rangeX, rangeY);
+      if (maxRange > 0) scale = maxRange * 0.35 / maxLen;
+    }
+    for (let j = 0; j < p; j++) {
+      const lx = loadings[j * k + compX]!;
+      const ly = loadings[j * k + compY]!;
+      if (Math.hypot(lx, ly) / maxLen < 0.05) continue;
+      arrows.push({ x: lx * scale, y: ly * scale, label: variables[j]! });
+    }
+    return arrows.length > 0 ? { arrows, color: "#ff6b6b", alpha: 0.85 } : null;
+  }, [isTourActive, projection.method, projection.variables, projection.loadings, projection.nComponents, projection.dimX, projection.dimY, projection.embedding, panel.x, panel.y]);
+
+  const rugOverlay = useMemo((): RugOverlay | null => {
+    if (!showRug || isTourActive || !xScaled || !yScaled) return null;
+    return {
+      x: xScaled.values,
+      y: yScaled.values,
+      xMissing: xScaled.missingBuffer,
+      yMissing: yScaled.missingBuffer,
+      color: "#6cf",
+      alpha: 0.35,
+      length: 6,
+    };
+  }, [showRug, isTourActive, xScaled, yScaled]);
+
+  const loessOverlay = useMemo((): LoessOverlay | null => {
+    if (!showLoess || isTourActive || !xCol || !yCol || !xScaled || !yScaled) return null;
+    if ((xCol.type !== "numeric" && xCol.type !== "integer") || (yCol.type !== "numeric" && yCol.type !== "integer")) return null;
+    const xVals = xScaled.values instanceof Float64Array ? xScaled.values : Float64Array.from(xScaled.values);
+    const yVals = yScaled.values instanceof Float64Array ? yScaled.values : Float64Array.from(yScaled.values);
+    const result = loess(xVals, yVals, xScaled.missingBuffer, selection.shadow, 0.75, 80);
+    if (!result) return null;
+    const points: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < result.x.length; i++) {
+      points.push({ x: result.x[i]!, y: result.y[i]! });
+    }
+    return { points, color: "#f4a261", alpha: 0.9, width: 2 };
+  }, [showLoess, isTourActive, xCol, yCol, xScaled, yScaled, selection.shadow]);
 
   const edgeOverlay = useMemo(() => {
     if (!edges.visible || !edges.layer) return null;
@@ -311,7 +434,7 @@ export function Scatter({ panel }: ScatterProps) {
     ? { tool: brush.tool, rect: brush.activeRect, path: brush.activePath }
     : null;
   const hullOverlay = buildHullOverlay(r.transform());
-  r.draw(visual, isThisPanelBrushing, edgeOverlay, hullOverlay);
+    r.draw(visual, isThisPanelBrushing, edgeOverlay, hullOverlay, contourOverlay, densityOverlay, biplotOverlay, rugOverlay, loessOverlay);
     updatePinnedLabels(r);
 
     // Build kd-tree from current pixel positions if missing.
@@ -372,7 +495,7 @@ export function Scatter({ panel }: ScatterProps) {
   hullCacheRef.current = null;
   requestPaint();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, pointSize, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding]);
+  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, pointSize, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding, classification.boundaryPaint, classification.gridSize, showDensity, showRug, showLoess]);
 
   // Mouse interactions.
   const dragRef = useRef<{
@@ -653,8 +776,35 @@ export function Scatter({ panel }: ScatterProps) {
   aria-label="point size"
   />
   </label>
-  <div className="plot-view-controls" aria-label="scatter viewport controls">
-  <button
+        <div className="plot-view-controls" aria-label="scatter viewport controls">
+          <button
+            type="button"
+            aria-label="toggle density contours"
+            title="density contours"
+            className={showDensity ? "active" : ""}
+            onClick={() => setShowDensity((v) => !v)}
+          >
+            ≋
+          </button>
+          <button
+            type="button"
+            aria-label="toggle rug marks"
+            title="rug marks"
+            className={showRug ? "active" : ""}
+            onClick={() => setShowRug((v) => !v)}
+          >
+            ┃
+          </button>
+          <button
+            type="button"
+            aria-label="toggle loess smooth"
+            title="loess smooth"
+            className={showLoess ? "active" : ""}
+            onClick={() => setShowLoess((v) => !v)}
+          >
+            ~
+          </button>
+          <button
   type="button"
   aria-label="zoom in"
   title="zoom in"

@@ -1,7 +1,12 @@
 import type {
+  BiplotOverlay,
   BrushOverlay,
+  ContourOverlay,
+  DensityOverlay,
   EdgeOverlay,
   HullOverlay,
+  LoessOverlay,
+  RugOverlay,
   ScatterRenderer,
   ScatterRenderState,
   ScatterTransform,
@@ -40,6 +45,14 @@ function drawMarker(
     ctx.lineTo(x, y + r * 1.35);
     ctx.lineTo(x - r * 1.35, y);
     ctx.closePath();
+  } else if (shape === 5) {
+    const s = r * 1.3;
+    ctx.moveTo(x - s, y - s);
+    ctx.lineTo(x + s, y + s);
+    ctx.moveTo(x + s, y - s);
+    ctx.lineTo(x - s, y + s);
+    ctx.stroke();
+    return;
   } else {
     ctx.arc(x, y, r, 0, Math.PI * 2);
   }
@@ -137,6 +150,11 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     activeBrush: BrushOverlay | null,
     edgeOverlay: EdgeOverlay | null = null,
     hullOverlay: HullOverlay | null = null,
+    contourOverlay: ContourOverlay | null = null,
+    densityOverlay: DensityOverlay | null = null,
+    biplotOverlay: BiplotOverlay | null = null,
+    rugOverlay: RugOverlay | null = null,
+    loessOverlay: LoessOverlay | null = null,
   ): void {
     const ctx = this.#ctx;
     if (!ctx || !this.#x || !this.#y || !this.#xMissing || !this.#yMissing) return;
@@ -157,8 +175,13 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
 
     drawEdges(ctx, edgeOverlay, t, x, y, xm, ym, visual.shadow);
     drawHullOverlay(ctx, hullOverlay);
+    drawContourOverlay(ctx, contourOverlay, t);
+    drawDensityOverlay(ctx, densityOverlay, t);
+    drawBiplotOverlay(ctx, biplotOverlay, t);
+    drawRugOverlay(ctx, rugOverlay, t);
+    drawLoessOverlay(ctx, loessOverlay, t);
 
-  // pass 1: shadowed (behind everything except edges, faint)
+    // pass 1: shadowed (behind everything except edges, faint)
   for (let i = 0; i < n; i++) {
     if (bitGet(xm, i) || bitGet(ym, i)) continue;
     if (!bitGet(visual.shadow, i)) continue;
@@ -226,6 +249,153 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     // pass 4: active brush overlay
     drawBrushOverlay(ctx, activeBrush);
   }
+}
+
+function drawContourOverlay(
+  ctx: CanvasRenderingContext2D,
+  overlay: ContourOverlay | null,
+  t: ScatterTransform,
+): void {
+  if (!overlay || overlay.nVars < 2) return;
+  const { grid, paint, resolution, nVars, mins, maxs, paintPalette, alpha } = overlay;
+  const res = resolution;
+  const nGrid = paint.length;
+  ctx.globalAlpha = alpha;
+  for (let idx = 0; idx < nGrid; idx++) {
+    const paintIdx = paint[idx]!;
+    if (paintIdx <= 0) continue;
+    const color = paintPalette[paintIdx - 1];
+    if (!color) continue;
+    const xVal = grid[idx * nVars]!;
+    const yVal = grid[idx * nVars + 1]!;
+    const p = t.toPx(xVal, yVal);
+    const dx = nVars >= 1 ? (maxs[0]! - mins[0]!) / (res - 1) : 0;
+    const dy = nVars >= 2 ? (maxs[1]! - mins[1]!) / (res - 1) : 0;
+    const pR = t.toPx(xVal + dx / 2, yVal + dy / 2);
+    const pL = t.toPx(xVal - dx / 2, yVal - dy / 2);
+    const cellW = Math.abs(pR.x - pL.x);
+    const cellH = Math.abs(pR.y - pL.y);
+    ctx.fillStyle = color;
+    ctx.fillRect(p.x - cellW / 2, p.y - cellH / 2, cellW, cellH);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawDensityOverlay(
+  ctx: CanvasRenderingContext2D,
+  overlay: DensityOverlay | null,
+  t: ScatterTransform,
+): void {
+  if (!overlay || overlay.contours.length === 0) return;
+  for (const contour of overlay.contours) {
+    ctx.strokeStyle = contour.color;
+    ctx.globalAlpha = contour.alpha;
+    ctx.lineWidth = 1;
+    for (const path of contour.paths) {
+      if (path.length < 2) continue;
+      ctx.beginPath();
+      const p0 = t.toPx(path[0]!.x, path[0]!.y);
+      ctx.moveTo(p0.x, p0.y);
+      for (let k = 1; k < path.length; k++) {
+        const p = t.toPx(path[k]!.x, path[k]!.y);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBiplotOverlay(
+  ctx: CanvasRenderingContext2D,
+  overlay: BiplotOverlay | null,
+  t: ScatterTransform,
+): void {
+  if (!overlay || overlay.arrows.length === 0) return;
+  const origin = t.toPx(0, 0);
+  ctx.globalAlpha = overlay.alpha;
+  ctx.strokeStyle = overlay.color;
+  ctx.fillStyle = overlay.color;
+  ctx.lineWidth = 1.5;
+  ctx.font = '10px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  for (const arrow of overlay.arrows) {
+    const tip = t.toPx(arrow.x, arrow.y);
+    ctx.beginPath();
+    ctx.moveTo(origin.x, origin.y);
+    ctx.lineTo(tip.x, tip.y);
+    ctx.stroke();
+    const dx = tip.x - origin.x;
+    const dy = tip.y - origin.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 8) {
+      const ux = dx / len, uy = dy / len;
+      const aLen = 8;
+      const aW = 3;
+      ctx.beginPath();
+      ctx.moveTo(tip.x, tip.y);
+      ctx.lineTo(tip.x - aLen * ux + aW * uy, tip.y - aLen * uy - aW * ux);
+      ctx.lineTo(tip.x - aLen * ux - aW * uy, tip.y - aLen * uy + aW * ux);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillText(arrow.label, tip.x + 4, tip.y - 4);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawRugOverlay(
+  ctx: CanvasRenderingContext2D,
+  overlay: RugOverlay | null,
+  t: ScatterTransform,
+): void {
+  if (!overlay) return;
+  const { x, y, xMissing, yMissing, color, alpha, length } = overlay;
+  const n = x.length;
+  const plotBottom = t.toPx(0, t.toData(0, 0).y).y + length;
+  const plotLeft = t.toPx(0, 0).x - length;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < n; i++) {
+    if (bitGet(xMissing, i)) continue;
+    const px = t.toPx(x[i]!, 0).x;
+    ctx.beginPath();
+    ctx.moveTo(px, plotBottom - length);
+    ctx.lineTo(px, plotBottom);
+    ctx.stroke();
+  }
+  for (let i = 0; i < n; i++) {
+    if (bitGet(yMissing, i)) continue;
+    const py = t.toPx(0, y[i]!).y;
+    ctx.beginPath();
+    ctx.moveTo(plotLeft, py);
+    ctx.lineTo(plotLeft + length, py);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawLoessOverlay(
+  ctx: CanvasRenderingContext2D,
+  overlay: LoessOverlay | null,
+  t: ScatterTransform,
+): void {
+  if (!overlay || overlay.points.length < 2) return;
+  ctx.strokeStyle = overlay.color;
+  ctx.globalAlpha = overlay.alpha;
+  ctx.lineWidth = overlay.width;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  const p0 = t.toPx(overlay.points[0]!.x, overlay.points[0]!.y);
+  ctx.moveTo(p0.x, p0.y);
+  for (let i = 1; i < overlay.points.length; i++) {
+    const p = t.toPx(overlay.points[i]!.x, overlay.points[i]!.y);
+    ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
 }
 
 function normalizeViewport(viewport: ScatterViewport): ScatterViewport {

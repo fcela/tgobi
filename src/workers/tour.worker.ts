@@ -126,6 +126,15 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
     case "setSpeed":
       speed = msg.speed;
       break;
+    case "setMode": {
+      const nextClassLabels = msg.classLabels ? new Int32Array(msg.classLabels) : null;
+      const changed = mode !== msg.mode || ppIndex !== msg.ppIndex || !sameLabels(classLabels, nextClassLabels);
+      mode = msg.mode;
+      ppIndex = msg.ppIndex;
+      classLabels = nextClassLabels;
+      if (changed) newTarget(currentFrame ?? curr ?? undefined);
+      break;
+    }
     case "setFrozenRows":
       updateFrozenRows(msg.frozenRows, true);
       break;

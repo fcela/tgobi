@@ -1,5 +1,6 @@
 import { agnes } from "ml-hclust";
-import type { ClusterResult } from "./types";
+import type { Cluster } from "ml-hclust";
+import type { ClusterResult, DendrogramData } from "./types";
 
 export type Linkage = "single" | "complete" | "average";
 
@@ -7,7 +8,7 @@ export function agglomerative(
   data: (number | null)[][],
   k: number,
   linkage: Linkage = "complete",
-): ClusterResult {
+): ClusterResult & { dendrogram?: DendrogramData } {
   const n = data.length;
   if (n === 0 || k <= 0) return { assignments: new Int16Array(0), k: 0, sizes: [] };
   const p = data[0]!.length;
@@ -44,5 +45,43 @@ export function agglomerative(
     sizes.push(members.length);
   }
 
-  return { assignments, k: sizes.length, sizes };
+  const dendrogram = extractDendrogram(tree, m);
+
+  return { assignments, k: sizes.length, sizes, dendrogram };
+}
+
+function extractDendrogram(root: Cluster, nLeaves: number): DendrogramData {
+  const merges: DendrogramData["merges"] = [];
+  const leafOrder: number[] = [];
+
+  let nextId = nLeaves;
+  const idMap = new Map<Cluster, number>();
+
+  function assignIds(node: Cluster): number {
+    if (node.isLeaf) {
+      const id = leafOrder.length;
+      leafOrder.push(node.index);
+      idMap.set(node, id);
+      return id;
+    }
+    const leftId = assignIds(node.children[0]!);
+    const rightId = assignIds(node.children[1]!);
+    const id = nextId++;
+    idMap.set(node, id);
+    merges.push({
+      height: node.height,
+      left: leftId,
+      right: rightId,
+      leafCount: node.size,
+    });
+    return id;
+  }
+
+  assignIds(root);
+
+  return {
+    merges,
+    leafOrder,
+    maxHeight: root.height,
+  };
 }

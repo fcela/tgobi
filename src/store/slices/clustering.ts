@@ -21,19 +21,20 @@ export const createClusteringSlice: StateCreator<AppStore, [], [], ClusteringSli
     sizes: [],
     running: false,
     error: null,
+    dendrogram: null,
   },
 
   setClusteringMethod: (method: ClusteringMethod) =>
-    set((s) => ({ clustering: { ...s.clustering, method, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, method, results: null, sizes: [], error: null, dendrogram: null } })),
 
   setClusteringVariables: (variables: string[]) =>
-    set((s) => ({ clustering: { ...s.clustering, variables, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, variables, results: null, sizes: [], error: null, dendrogram: null } })),
 
   setClusteringK: (k: number) =>
-    set((s) => ({ clustering: { ...s.clustering, k, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, k, results: null, sizes: [], error: null, dendrogram: null } })),
 
   setClusteringLinkage: (linkage: Linkage) =>
-    set((s) => ({ clustering: { ...s.clustering, linkage, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, linkage, results: null, sizes: [], error: null, dendrogram: null } })),
 
   setClusteringEps: (eps: number) =>
     set((s) => ({ clustering: { ...s.clustering, eps, results: null, sizes: [], error: null } })),
@@ -81,27 +82,29 @@ export const createClusteringSlice: StateCreator<AppStore, [], [], ClusteringSli
         data.push(row);
       }
 
-      const result = method === "kmeans"
-        ? kMeans(data, k)
-        : method === "hierarchical"
-        ? agglomerative(data, k, linkage)
-        : method === "dbscan"
-        ? dbscan(data, eps, minPts)
-        : method === "optics"
-        ? optics(data, eps, minPts, xi)
-        : xMeans(data, kMax);
+    const result = method === "kmeans"
+      ? kMeans(data, k)
+      : method === "hierarchical"
+      ? agglomerative(data, k, linkage)
+      : method === "dbscan"
+      ? dbscan(data, eps, minPts)
+      : method === "optics"
+      ? optics(data, eps, minPts, xi)
+      : xMeans(data, kMax);
 
-      const effectiveK = method === "xmeans" ? (result as ReturnType<typeof xMeans>).k : result.k;
+    const effectiveK = method === "xmeans" ? (result as ReturnType<typeof xMeans>).k : result.k;
+    const dendrogram = method === "hierarchical" ? (result as ReturnType<typeof agglomerative>).dendrogram ?? null : null;
 
-      set((s) => ({
-        clustering: {
-          ...s.clustering,
-          results: result.assignments,
-          k: effectiveK,
-          sizes: result.sizes,
-          running: false,
-        },
-      }));
+    set((s) => ({
+      clustering: {
+        ...s.clustering,
+        results: result.assignments,
+        k: effectiveK,
+        sizes: result.sizes,
+        running: false,
+        dendrogram,
+      },
+    }));
     } catch (e) {
       set((s) => ({
         clustering: {
@@ -145,6 +148,7 @@ export const createClusteringSlice: StateCreator<AppStore, [], [], ClusteringSli
         sizes: [],
         running: false,
         error: null,
+        dendrogram: null,
       },
     })),
 });

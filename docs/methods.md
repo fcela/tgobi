@@ -444,3 +444,111 @@ This gives approximate but useful importance scores.
 For PCA and ICA, permutation is unnecessary because loadings directly quantify
 variable contributions. The importance is computed as a variance-weighted sum of
 squared loadings.
+
+---
+
+## Scatter Overlays
+
+### Density Contours (2D KDE)
+
+A two-dimensional kernel density estimate (KDE) is computed over the scatter
+data and rendered as contour lines.
+
+**Kernel**: Gaussian kernel with bandwidth automatically set to 1.5× the grid
+spacing on a 50×50 grid.
+
+$$\hat{f}(x, y) = \frac{1}{n}\sum_{i=1}^{n}\frac{1}{2\pi h^2}\exp\!\left(-\frac{(x-x_i)^2 + (y-y_i)^2}{2h^2}\right)$$
+
+**Contour levels**: 5 quantile levels computed from the non-zero density values.
+Contours are extracted using the marching squares algorithm [Lorensen & Cline 1987].
+
+**Color**: viridis-like palette from dark (low density) to warm (high density).
+
+### Rug Marks
+
+Tick marks along each axis showing the marginal distribution of data points.
+Each point contributes a small line segment (6 px) perpendicular to the axis at
+its coordinate value. This gives a 1D marginal view without occluding the 2D
+scatter.
+
+### LOESS Smooth
+
+LOcally Estimated Scatterplot Smoothing [Cleveland 1979]. Fits a smooth curve
+through the scatter by performing local linear regressions with tricube kernel
+weighting.
+
+**Local linear fit**: at each evaluation point $x_0$, fit a line by weighted
+least squares to the $k$ nearest neighbors, where $k = \text{round}(0.75 \times n)$:
+
+$$\hat{y}(x_0) = \hat{\beta}_0 + \hat{\beta}_1 x_0$$
+
+where $(\hat{\beta}_0, \hat{\beta}_1)$ minimize:
+
+$$\sum_{i=1}^{k} w_i\,(y_i - \beta_0 - \beta_1(x_i - x_0))^2$$
+
+**Tricube kernel**:
+
+$$W(u) = \begin{cases}(1 - |u|^3)^3 & |u| < 1 \\ 0 & |u| \ge 1\end{cases}$$
+
+where $u = (x_i - x_0)/\Delta$ and $\Delta$ is the distance to the farthest
+neighbor in the window.
+
+**Robustness iterations** (3 total): after the initial fit, compute residuals.
+Points with large residuals (MAD-based threshold) are down-weighted using a
+bisquare function, and the fit is recomputed. This reduces the influence of
+outliers.
+
+**Output**: 80 evaluation points from $x_\min$ to $x_\max$.
+
+### Biplot Arrows
+
+When viewing PCA components, biplot arrows show how each original variable
+contributes to the displayed 2D projection. Each arrow extends from the origin
+to the scaled loading coordinates for that variable:
+
+$$\text{arrow}_v = (\ell_{v,\text{PC}_x} \cdot s,\; \ell_{v,\text{PC}_y} \cdot s)$$
+
+where $\ell_{v,c}$ is the loading of variable $v$ on component $c$, and $s$ is
+a scaling factor set to 35% of the maximum data range divided by the maximum
+loading length. Arrows shorter than 5% of the maximum are hidden.
+
+---
+
+## Dendrogram
+
+When hierarchical clustering is used, an interactive dendrogram is displayed in
+the Clustering panel. The dendrogram shows the full merge tree, with merge
+height on the vertical axis and leaf order on the horizontal axis.
+
+**Structure**: each merge node connects two children (leaves or previously
+merged clusters) at the merge distance. Branches below the cut height (dashed
+orange line) are colored in accent blue; those above are dimmed.
+
+**Interactive cut**: dragging the dashed cut line vertically changes the number
+of clusters $k$, which can then be re-applied.
+
+---
+
+## References
+
+1. Asimov, D. (1985). The grand tour: a tool for viewing multidimensional data. *SIAM Journal on Scientific and Statistical Computing*, 6(1), 128–143.
+
+2. Borg, I. & Groenen, P. J. F. (2005). *Modern Multidimensional Scaling: Theory and Applications*. 2nd ed. Springer.
+
+3. Cleveland, W. S. (1979). Robust locally weighted regression and smoothing scatterplots. *Journal of the American Statistical Association*, 74(368), 829–836.
+
+4. Cook, D., Buja, A., Cabrera, J., & Hurley, C. (1995). Grand tour and projection pursuit. *Journal of Computational and Graphical Statistics*, 4(3), 155–172.
+
+5. Cook, D., Swayne, D. F., & Buja, A. (2007). *Interactive and Dynamic Graphics for Data Analysis*. Springer.
+
+6. Hyvärinen, A. (1999). Fast and robust fixed-point algorithms for independent component analysis. *IEEE Transactions on Neural Networks*, 10(3), 626–634.
+
+7. Jolliffe, I. T. (2002). *Principal Component Analysis*. 2nd ed. Springer.
+
+8. Kruskal, J. B. (1964). Multidimensional scaling by optimizing goodness of fit to a nonmetric hypothesis. *Psychometrika*, 29(1), 1–27.
+
+9. Lorensen, W. E. & Cline, H. E. (1987). Marching cubes: a high resolution 3D surface construction algorithm. *ACM SIGGRAPH Computer Graphics*, 21(4), 163–169.
+
+10. van der Maaten, L. & Hinton, G. (2008). Visualizing data using t-SNE. *Journal of Machine Learning Research*, 9, 2579–2605.
+
+11. McInnes, L., Healy, J., & Melville, J. (2020). UMAP: uniform manifold approximation and projection for dimension reduction. *Open Journal of Statistics*, 10(3), 683–711.

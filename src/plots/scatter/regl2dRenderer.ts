@@ -1,9 +1,14 @@
 import createRegl from "regl";
 import type { Regl, DrawCommand } from "regl";
 import type {
+  BiplotOverlay,
   BrushOverlay,
+  ContourOverlay,
+  DensityOverlay,
   EdgeOverlay,
   HullOverlay,
+  LoessOverlay,
+  RugOverlay,
   ScatterRenderer,
   ScatterRenderState,
   ScatterTransform,
@@ -207,10 +212,20 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
     if (v_pass == 2.0) { // hollow triangle
     if (pc.y > pc.x - 0.4 && pc.y > -pc.x - 0.4 && pc.y < 0.1) discard;
     }
-  } else { // diamond
-    if (abs(pc.x) + abs(pc.y) > 1.0) discard;
-    if (v_pass == 2.0 && abs(pc.x) + abs(pc.y) < 0.6) discard;
-  }
+        } else if (v_shape <= 4.5) { // diamond
+        if (abs(pc.x) + abs(pc.y) > 1.0) discard;
+        if (v_pass == 2.0 && abs(pc.x) + abs(pc.y) < 0.6) discard;
+      } else if (v_shape <= 5.5) { // X cross
+        float d1 = abs(pc.x - pc.y) / 1.414;
+        float d2 = abs(pc.x + pc.y) / 1.414;
+        float d = min(d1, d2);
+        if (d > 0.35) discard;
+        if (v_pass == 2.0 && d < 0.15) discard;
+      } else {
+        float dist = length(pc);
+        if (dist > 1.0) discard;
+        if (v_pass == 2.0 && dist < 0.6) discard;
+      }
 
   if (v_pass == 2.0) {
     gl_FragColor = vec4(1.0, 0.83, 0.0, v_alpha); // #ffd400
@@ -421,10 +436,15 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   }
 
   draw(
-  visual: ScatterRenderState,
-  activeBrush: BrushOverlay | null,
-  edgeOverlay: EdgeOverlay | null = null,
-  hullOverlay: HullOverlay | null = null,
+    visual: ScatterRenderState,
+    activeBrush: BrushOverlay | null,
+    edgeOverlay: EdgeOverlay | null = null,
+    hullOverlay: HullOverlay | null = null,
+    contourOverlay: ContourOverlay | null = null,
+    densityOverlay: DensityOverlay | null = null,
+    biplotOverlay: BiplotOverlay | null = null,
+    rugOverlay: RugOverlay | null = null,
+    loessOverlay: LoessOverlay | null = null,
   ): void {
   if (!this.#regl || !this.#drawPoints) return;
   const n = this.#count;
@@ -510,6 +530,11 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   // Frame
   if (this.#overlayCtx) {
     this.#overlayCtx.clearRect(0, 0, this.#w, this.#h);
+    this.#drawContourOverlay(contourOverlay);
+    this.#drawDensityOverlay(densityOverlay);
+    this.#drawBiplotOverlay(biplotOverlay);
+    this.#drawRugOverlay(rugOverlay);
+    this.#drawLoessOverlay(loessOverlay);
     drawHullOverlay(this.#overlayCtx, hullOverlay);
     this.#overlayCtx.strokeStyle = "#2a2a2a";
     this.#overlayCtx.lineWidth = 1;
@@ -541,6 +566,167 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
       this.#overlayCtx.globalAlpha = 1;
     }
   }
+  }
+
+  #drawContourOverlay(overlay: ContourOverlay | null): void {
+    if (!overlay || !this.#overlayCtx || overlay.nVars < 2) return;
+    const { grid, paint, resolution, nVars, mins, maxs, paintPalette, alpha } = overlay;
+    const view = this.getViewBounds();
+    const innerW = Math.max(1, this.#w - 2 * MARGIN);
+    const innerH = Math.max(1, this.#h - 2 * MARGIN);
+    const toPx = (dx: number, dy: number) => ({
+      x: MARGIN + ((dx - view.xMin) / (view.xMax - view.xMin)) * innerW,
+      y: MARGIN + (1 - (dy - view.yMin) / (view.yMax - view.yMin)) * innerH,
+    });
+    const res = resolution;
+    const dx = nVars >= 1 ? (maxs[0]! - mins[0]!) / Math.max(1, res - 1) : 0;
+    const dy = nVars >= 2 ? (maxs[1]! - mins[1]!) / Math.max(1, res - 1) : 0;
+    const pC = toPx(mins[0]! - dx / 2, mins[1]! - dy / 2);
+    const pR = toPx(mins[0]! + dx / 2, mins[1]! - dy / 2);
+    const pU = toPx(mins[0]! - dx / 2, mins[1]! + dy / 2);
+    const cellW = Math.abs(pR.x - pC.x);
+    const cellH = Math.abs(pU.y - pC.y);
+    const nGrid = paint.length;
+    this.#overlayCtx.globalAlpha = alpha;
+    for (let idx = 0; idx < nGrid; idx++) {
+      const paintIdx = paint[idx]!;
+      if (paintIdx <= 0) continue;
+      const color = paintPalette[paintIdx - 1];
+      if (!color) continue;
+      const xVal = grid[idx * nVars]!;
+      const yVal = grid[idx * nVars + 1]!;
+      const p = toPx(xVal, yVal);
+      this.#overlayCtx.fillStyle = color;
+      this.#overlayCtx.fillRect(p.x - cellW / 2, p.y - cellH / 2, cellW, cellH);
+    }
+    this.#overlayCtx.globalAlpha = 1;
+  }
+
+  #drawDensityOverlay(overlay: DensityOverlay | null): void {
+    if (!overlay || !this.#overlayCtx || overlay.contours.length === 0) return;
+    const view = this.getViewBounds();
+    const innerW = Math.max(1, this.#w - 2 * MARGIN);
+    const innerH = Math.max(1, this.#h - 2 * MARGIN);
+    const toPx = (dx: number, dy: number) => ({
+      x: MARGIN + ((dx - view.xMin) / (view.xMax - view.xMin)) * innerW,
+      y: MARGIN + (1 - (dy - view.yMin) / (view.yMax - view.yMin)) * innerH,
+    });
+    for (const contour of overlay.contours) {
+      this.#overlayCtx.strokeStyle = contour.color;
+      this.#overlayCtx.globalAlpha = contour.alpha;
+      this.#overlayCtx.lineWidth = 1;
+      for (const path of contour.paths) {
+        if (path.length < 2) continue;
+        this.#overlayCtx.beginPath();
+        const p0 = toPx(path[0]!.x, path[0]!.y);
+        this.#overlayCtx.moveTo(p0.x, p0.y);
+        for (let k = 1; k < path.length; k++) {
+          const p = toPx(path[k]!.x, path[k]!.y);
+          this.#overlayCtx.lineTo(p.x, p.y);
+        }
+        this.#overlayCtx.stroke();
+      }
+    }
+    this.#overlayCtx.globalAlpha = 1;
+  }
+
+  #drawBiplotOverlay(overlay: BiplotOverlay | null): void {
+    if (!overlay || !this.#overlayCtx || overlay.arrows.length === 0) return;
+    const view = this.getViewBounds();
+    const innerW = Math.max(1, this.#w - 2 * MARGIN);
+    const innerH = Math.max(1, this.#h - 2 * MARGIN);
+    const toPx = (dx: number, dy: number) => ({
+      x: MARGIN + ((dx - view.xMin) / (view.xMax - view.xMin)) * innerW,
+      y: MARGIN + (1 - (dy - view.yMin) / (view.yMax - view.yMin)) * innerH,
+    });
+    const origin = toPx(0, 0);
+    const ctx = this.#overlayCtx;
+    ctx.globalAlpha = overlay.alpha;
+    ctx.strokeStyle = overlay.color;
+    ctx.fillStyle = overlay.color;
+    ctx.lineWidth = 1.5;
+    ctx.font = '10px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    for (const arrow of overlay.arrows) {
+      const tip = toPx(arrow.x, arrow.y);
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      ctx.lineTo(tip.x, tip.y);
+      ctx.stroke();
+      const dx = tip.x - origin.x;
+      const dy = tip.y - origin.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 8) {
+        const ux = dx / len, uy = dy / len;
+        const aLen = 8, aW = 3;
+        ctx.beginPath();
+        ctx.moveTo(tip.x, tip.y);
+        ctx.lineTo(tip.x - aLen * ux + aW * uy, tip.y - aLen * uy - aW * ux);
+        ctx.lineTo(tip.x - aLen * ux - aW * uy, tip.y - aLen * uy + aW * ux);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillText(arrow.label, tip.x + 4, tip.y - 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  #drawRugOverlay(overlay: RugOverlay | null): void {
+    if (!overlay || !this.#overlayCtx) return;
+    const ctx = this.#overlayCtx;
+    const { x, y, xMissing, yMissing, color, alpha, length } = overlay;
+    const n = x.length;
+    const view = this.getViewBounds();
+    const innerW = Math.max(1, this.#w - 2 * MARGIN);
+    const innerH = Math.max(1, this.#h - 2 * MARGIN);
+    const plotBottom = MARGIN + innerH + length;
+    const plotLeft = MARGIN - length;
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = 1;
+    for (let i = 0; i < n; i++) {
+      if (bitGet(xMissing, i)) continue;
+      const px = MARGIN + ((x[i]! - view.xMin) / (view.xMax - view.xMin)) * innerW;
+      ctx.beginPath();
+      ctx.moveTo(px, plotBottom - length);
+      ctx.lineTo(px, plotBottom);
+      ctx.stroke();
+    }
+    for (let i = 0; i < n; i++) {
+      if (bitGet(yMissing, i)) continue;
+      const py = MARGIN + (1 - (y[i]! - view.yMin) / (view.yMax - view.yMin)) * innerH;
+      ctx.beginPath();
+      ctx.moveTo(plotLeft, py);
+      ctx.lineTo(plotLeft + length, py);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  #drawLoessOverlay(overlay: LoessOverlay | null): void {
+    if (!overlay || !this.#overlayCtx || overlay.points.length < 2) return;
+    const ctx = this.#overlayCtx;
+    const view = this.getViewBounds();
+    const innerW = Math.max(1, this.#w - 2 * MARGIN);
+    const innerH = Math.max(1, this.#h - 2 * MARGIN);
+    const toPx = (dx: number, dy: number) => ({
+      x: MARGIN + ((dx - view.xMin) / (view.xMax - view.xMin)) * innerW,
+      y: MARGIN + (1 - (dy - view.yMin) / (view.yMax - view.yMin)) * innerH,
+    });
+    ctx.strokeStyle = overlay.color;
+    ctx.globalAlpha = overlay.alpha;
+    ctx.lineWidth = overlay.width;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    const p0 = toPx(overlay.points[0]!.x, overlay.points[0]!.y);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < overlay.points.length; i++) {
+      const p = toPx(overlay.points[i]!.x, overlay.points[i]!.y);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   #drawEdgeOverlay(

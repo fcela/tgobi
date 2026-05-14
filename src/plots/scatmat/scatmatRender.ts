@@ -36,6 +36,14 @@ function drawMarker(
     ctx.lineTo(x, y + r * 1.35);
     ctx.lineTo(x - r * 1.35, y);
     ctx.closePath();
+  } else if (shape === 5) {
+    const s = r * 1.3;
+    ctx.moveTo(x - s, y - s);
+    ctx.lineTo(x + s, y + s);
+    ctx.moveTo(x + s, y - s);
+    ctx.lineTo(x - s, y + s);
+    ctx.stroke();
+    return;
   } else {
     ctx.arc(x, y, r, 0, Math.PI * 2);
   }

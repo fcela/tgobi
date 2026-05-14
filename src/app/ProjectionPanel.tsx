@@ -274,7 +274,7 @@ export function ProjectionPanel() {
 
       <div className="row">
         <button disabled={!canRun} onClick={run} aria-label="compute projection">
-          Compute
+          {projection.running ? <span className="spinner" /> : "Compute"}
         </button>
         {canMaterialize && (
           <>

@@ -3,6 +3,8 @@ import { useAppStore } from "@/store";
 import { ArrayDataFrame } from "@/lib/data/dataframe";
 import { makeNumericColumn } from "@/lib/data/columns";
 
+const tick = () => new Promise<void>((r) => setTimeout(r, 10));
+
 beforeEach(() => {
   useAppStore.getState().clear();
   useAppStore.getState().clearProjection();
@@ -44,7 +46,7 @@ describe("ProjectionSlice", () => {
     expect(useAppStore.getState().projection.error).toBeTruthy();
   });
 
-  it("runProjection produces embedding with PCA", () => {
+  it("runProjection produces embedding with PCA", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
       makeNumericColumn("b", new Float64Array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])),
@@ -53,6 +55,7 @@ describe("ProjectionSlice", () => {
     useAppStore.getState().setData(df);
     useAppStore.getState().setProjectionVariables(["a", "b", "c"]);
     useAppStore.getState().runProjection();
+    await tick();
 
     const p = useAppStore.getState().projection;
     expect(p.error).toBeNull();
@@ -62,7 +65,7 @@ describe("ProjectionSlice", () => {
     expect(p.running).toBe(false);
   });
 
-  it("materializeProjection adds columns and scatter", () => {
+  it("materializeProjection adds columns and scatter", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
       makeNumericColumn("b", new Float64Array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])),
@@ -70,6 +73,7 @@ describe("ProjectionSlice", () => {
     useAppStore.getState().setData(df);
     useAppStore.getState().setProjectionVariables(["a", "b"]);
     useAppStore.getState().runProjection();
+    await tick();
 
     const p = useAppStore.getState().projection;
     expect(p.embedding).not.toBeNull();

@@ -5,6 +5,7 @@ import type { VarSpec, ScalingMode } from "@/types";
 import type { Linkage } from "@/lib/clustering/hierarchical";
 import type { ClassificationMethod } from "@/lib/classification/types";
 import type { ProjectionMethod } from "@/lib/projection/types";
+import type { DendrogramData } from "@/lib/clustering/types";
 
 export interface DataSlice {
   df: DataFrame | null;
@@ -359,6 +360,7 @@ export interface ClusteringSlice {
     sizes: number[];
     running: boolean;
     error: string | null;
+    dendrogram: DendrogramData | null;
   };
   setClusteringMethod: (method: ClusteringMethod) => void;
   setClusteringVariables: (vars: string[]) => void;
@@ -385,6 +387,8 @@ export interface ClassificationSlice {
     boundaryPaint: Uint8Array | null;
     boundaryGrid: Float64Array | null;
     gridSize: number;
+    boundaryMins: Float64Array | null;
+    boundaryMaxs: Float64Array | null;
     predictions: Int16Array | null;
     misclassified: Uint8Array | null;
     classToPaint: number[] | null;

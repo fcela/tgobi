@@ -3,6 +3,7 @@ import { useAppStore } from "@/store";
 import type { ClusteringMethod } from "@/store/types";
 import type { Linkage } from "@/lib/clustering/hierarchical";
 import { ClampedInput } from "@/app/ClampedInput";
+import { Dendrogram } from "@/app/Dendrogram";
 
 export function ClusteringPanel() {
   const df = useAppStore((s) => s.df);
@@ -152,13 +153,25 @@ export function ClusteringPanel() {
         <div className="row error">{clustering.error}</div>
       )}
 
-      {clustering.results && (
-        <div className="row summary">
-          <small>
-            {clustering.sizes.length} clusters, sizes: {clustering.sizes.join(" / ")}
-          </small>
-        </div>
-      )}
+  {clustering.results && (
+    <div className="row summary">
+      <small>
+        {clustering.sizes.length} clusters, sizes: {clustering.sizes.join(" / ")}
+      </small>
+    </div>
+  )}
+
+  {clustering.method === "hierarchical" && clustering.dendrogram && (
+    <div className="row" style={{ justifyContent: "center" }}>
+      <Dendrogram
+        data={clustering.dendrogram}
+        k={clustering.k}
+        width={260}
+        height={140}
+        onCutChange={(newK) => setK(newK)}
+      />
+    </div>
+  )}
 
       <div className="row">
         <button disabled={!canRun} onClick={run} aria-label="run clustering">

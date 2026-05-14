@@ -3,11 +3,9 @@ import type { AppStore, ClassificationSlice } from "@/store/types";
 import { knnClassify } from "@/lib/classification/knn";
 import { naiveBayesClassify } from "@/lib/classification/naivebayes";
 import { randomForestClassify } from "@/lib/classification/randomforest";
-import { bitGet, bitSet } from "@/lib/brush/hitTest";
-import { ArrayDataFrame } from "@/lib/data/dataframe";
-import { makeNumericColumn } from "@/lib/data/columns";
+import { bitGet } from "@/lib/brush/hitTest";
 
-const MISCLASSIFIED_SHAPE = 3;
+const MISCLASSIFIED_SHAPE = 5;
 
 export const createClassificationSlice: StateCreator<AppStore, [], [], ClassificationSlice> = (set, get) => ({
   classification: {
@@ -21,6 +19,8 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
     boundaryPaint: null,
     boundaryGrid: null,
     gridSize: 0,
+    boundaryMins: null,
+    boundaryMaxs: null,
     predictions: null,
     misclassified: null,
     classToPaint: null,
@@ -29,16 +29,16 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
   },
 
   setClassificationMethod: (method) =>
-    set((s) => ({ classification: { ...s.classification, method, boundaryPaint: null, boundaryGrid: null, gridSize: 0, predictions: null, misclassified: null, classToPaint: null, error: null } })),
+    set((s) => ({ classification: { ...s.classification, method, boundaryPaint: null, boundaryGrid: null, gridSize: 0, boundaryMins: null, boundaryMaxs: null, predictions: null, misclassified: null, classToPaint: null, error: null } })),
 
   setClassificationVariables: (variables) =>
-    set((s) => ({ classification: { ...s.classification, variables, boundaryPaint: null, boundaryGrid: null, gridSize: 0, predictions: null, misclassified: null, classToPaint: null, error: null } })),
+    set((s) => ({ classification: { ...s.classification, variables, boundaryPaint: null, boundaryGrid: null, gridSize: 0, boundaryMins: null, boundaryMaxs: null, predictions: null, misclassified: null, classToPaint: null, error: null } })),
 
   setClassificationClassSource: (classSource) =>
-    set((s) => ({ classification: { ...s.classification, classSource, boundaryPaint: null, boundaryGrid: null, gridSize: 0, predictions: null, misclassified: null, classToPaint: null, error: null } })),
+    set((s) => ({ classification: { ...s.classification, classSource, boundaryPaint: null, boundaryGrid: null, gridSize: 0, boundaryMins: null, boundaryMaxs: null, predictions: null, misclassified: null, classToPaint: null, error: null } })),
 
   setClassificationGridResolution: (gridResolution) =>
-    set((s) => ({ classification: { ...s.classification, gridResolution, boundaryPaint: null, boundaryGrid: null, gridSize: 0, predictions: null, misclassified: null, classToPaint: null, error: null } })),
+    set((s) => ({ classification: { ...s.classification, gridResolution, boundaryPaint: null, boundaryGrid: null, gridSize: 0, boundaryMins: null, boundaryMaxs: null, predictions: null, misclassified: null, classToPaint: null, error: null } })),
 
   setClassificationKnnK: (knnK) =>
     set((s) => ({ classification: { ...s.classification, knnK, boundaryPaint: null, error: null } })),
@@ -101,6 +101,7 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
 
     set((s) => ({ classification: { ...s.classification, running: true, error: null } }));
 
+    setTimeout(() => {
     try {
       const columns = variables.map((name) => df.column(name));
       const p = variables.length;
@@ -169,18 +170,20 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
         }
       }
 
-      set((s) => ({
-        classification: {
-          ...s.classification,
-          boundaryPaint,
-          boundaryGrid: gridFlat,
-          gridSize: nGrid,
-          predictions,
-          misclassified,
-          classToPaint,
-          running: false,
-        },
-      }));
+        set((s) => ({
+          classification: {
+            ...s.classification,
+            boundaryPaint,
+            boundaryGrid: gridFlat,
+            gridSize: nGrid,
+            boundaryMins: mins,
+            boundaryMaxs: maxs,
+            predictions,
+            misclassified,
+            classToPaint,
+            running: false,
+          },
+        }));
     } catch (e) {
       set((s) => ({
         classification: {
@@ -190,62 +193,29 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
         },
       }));
     }
+    }, 0);
   },
 
   applyClassificationBoundaries: () => {
-    const { boundaryPaint, boundaryGrid, gridSize, variables, misclassified, classToPaint, classSource, predictions } = get().classification;
+    const { misclassified, classToPaint, classSource, predictions, boundaryPaint, boundaryGrid, gridSize } = get().classification;
     const { df } = get();
-    if (!boundaryPaint || !boundaryGrid || !df || gridSize === 0) return;
+    if (!df || !boundaryPaint || !boundaryGrid || gridSize === 0) return;
 
     const nOrig = df.nrow;
-    const nTotal = nOrig + gridSize;
-    const p = variables.length;
-
-    const newColumns = [...df.columns];
-    for (let j = 0; j < p; j++) {
-      const srcCol = df.column(variables[j]!);
-      if (!srcCol || (srcCol.type !== "numeric" && srcCol.type !== "integer")) continue;
-      const origValues = srcCol.type === "numeric" ? srcCol.values : new Float64Array(srcCol.values);
-      const newValues = new Float64Array(nTotal);
-      newValues.set(origValues);
-      for (let i = 0; i < gridSize; i++) {
-        newValues[nOrig + i] = boundaryGrid[i * p + j]!;
-      }
-      const idx = newColumns.findIndex((c) => c.name === variables[j]);
-      if (idx >= 0) newColumns[idx] = makeNumericColumn(variables[j]!, newValues);
-    }
-
-    for (const col of df.columns) {
-      if (variables.includes(col.name)) continue;
-      if (col.type === "numeric") {
-        const newValues = new Float64Array(nTotal);
-        newValues.set(col.values);
-        const idx = newColumns.findIndex((c) => c.name === col.name);
-        if (idx >= 0) newColumns[idx] = makeNumericColumn(col.name, newValues);
-      } else if (col.type === "integer") {
-        const newValues = new Float64Array(nTotal);
-        for (let i = 0; i < col.values.length; i++) newValues[i] = col.values[i]!;
-        const idx = newColumns.findIndex((c) => c.name === col.name);
-        if (idx >= 0) newColumns[idx] = makeNumericColumn(col.name, newValues);
-      } else if (col.type === "categorical") {
-        const newValues = new Float64Array(nTotal);
-        const idx = newColumns.findIndex((c) => c.name === col.name);
-        if (idx >= 0) newColumns[idx] = makeNumericColumn(col.name, newValues);
-      } else if (col.type === "date") {
-        const newValues = new Float64Array(nTotal);
-        newValues.set(col.values);
-        const idx = newColumns.findIndex((c) => c.name === col.name);
-        if (idx >= 0) newColumns[idx] = makeNumericColumn(col.name, newValues);
-      }
-    }
-
-    const newDf = new ArrayDataFrame(newColumns);
-    const origPaint = get().selection.paint;
-    const origShadow = get().selection.shadow;
-    const origMask = get().selection.mask;
     const origShape = get().selection.shape;
+    const origPaint = get().selection.paint;
+    const newShape = new Uint8Array(origShape.length);
+    newShape.set(origShape);
 
-    const newPaint = new Uint8Array(nTotal);
+    if (misclassified) {
+      for (let i = 0; i < nOrig; i++) {
+        if (misclassified[i] && origShape[i] === 0) {
+          newShape[i] = MISCLASSIFIED_SHAPE;
+        }
+      }
+    }
+
+    const newPaint = new Uint8Array(origPaint.length);
     if (classSource !== "paint" && predictions && classToPaint) {
       for (let i = 0; i < nOrig; i++) {
         const cls = predictions[i]!;
@@ -256,35 +226,16 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
         }
       }
     } else {
-      newPaint.set(origPaint.subarray(0, nOrig));
-    }
-    newPaint.set(boundaryPaint, nOrig);
-
-    const newShadow = new Uint8Array(Math.ceil(nTotal / 8));
-    newShadow.set(origShadow.subarray(0, Math.ceil(nOrig / 8)));
-    for (let i = nOrig; i < nTotal; i++) bitSet(newShadow, i);
-
-    const newMask = new Uint8Array(Math.ceil(nTotal / 8));
-    newMask.set(origMask.subarray(0, Math.ceil(nOrig / 8)));
-
-    const newShape = new Uint8Array(nTotal);
-    newShape.set(origShape.subarray(0, nOrig));
-    if (misclassified) {
-      for (let i = 0; i < nOrig; i++) {
-        if (misclassified[i] && origShape[i] === 0) {
-          newShape[i] = MISCLASSIFIED_SHAPE;
-        }
-      }
+      newPaint.set(origPaint);
     }
 
     set((s) => ({
-      df: newDf,
-      selection: { mask: newMask, paint: newPaint, shape: newShape, shadow: newShadow },
+      selection: { ...s.selection, paint: newPaint, shape: newShape },
       color: { ...s.color, encoding: { kind: "paint" } },
     }));
 
-    if (variables.length >= 2) {
-      get().addScatter(variables[0]!, variables[1]!);
+    if (get().classification.variables.length >= 2) {
+      get().addScatter(get().classification.variables[0]!, get().classification.variables[1]!);
     }
   },
 
@@ -301,6 +252,8 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
         boundaryPaint: null,
         boundaryGrid: null,
         gridSize: 0,
+        boundaryMins: null,
+        boundaryMaxs: null,
         predictions: null,
         misclassified: null,
         classToPaint: null,

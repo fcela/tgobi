@@ -4,6 +4,8 @@ import { ArrayDataFrame } from "@/lib/data/dataframe";
 import { makeNumericColumn, makeCategoricalColumn } from "@/lib/data/columns";
 import { bitGet } from "@/lib/brush/hitTest";
 
+const tick = () => new Promise<void>((r) => setTimeout(r, 10));
+
 beforeEach(() => {
   useAppStore.getState().clear();
   useAppStore.getState().clearClassification();
@@ -71,7 +73,7 @@ describe("ClassificationSlice", () => {
     expect(useAppStore.getState().classification.error).toContain("class");
   });
 
-  it("runClassification produces boundary paint with painted groups", () => {
+  it("runClassification produces boundary paint with painted groups", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
       makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
@@ -82,6 +84,7 @@ describe("ClassificationSlice", () => {
     useAppStore.getState().setClassificationVariables(["a", "b"]);
     useAppStore.getState().setClassificationGridResolution(3);
     useAppStore.getState().runClassification();
+    await tick();
 
     const c = useAppStore.getState().classification;
     expect(c.error).toBeNull();
@@ -101,7 +104,7 @@ describe("ClassificationSlice", () => {
     expect(c.knnK).toBe(5);
   });
 
-  it("applyClassificationBoundaries extends df, paint and shadow arrays", () => {
+  it("applyClassificationBoundaries does not extend df; overlay is separate", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
       makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
@@ -111,22 +114,21 @@ describe("ClassificationSlice", () => {
     useAppStore.getState().setClassificationVariables(["a", "b"]);
     useAppStore.getState().setClassificationGridResolution(2);
     useAppStore.getState().runClassification();
+    await tick();
 
     const origN = df.nrow;
     const gridSz = useAppStore.getState().classification.gridSize;
+    expect(gridSz).toBeGreaterThan(0);
+    expect(useAppStore.getState().classification.boundaryPaint).not.toBeNull();
+    expect(useAppStore.getState().classification.boundaryMins).not.toBeNull();
+
     useAppStore.getState().applyClassificationBoundaries();
     const state = useAppStore.getState();
-    const s = state.selection;
-    expect(state.df!.nrow).toBe(origN + gridSz);
-    expect(s.paint.length).toBe(origN + gridSz);
-    expect(s.shadow.length).toBeGreaterThanOrEqual(Math.ceil((origN + gridSz) / 8));
-    for (let i = origN; i < origN + gridSz; i++) {
-      expect(s.paint[i]).toBeGreaterThan(0);
-      expect(bitGet(s.shadow, i)).toBe(true);
-    }
+    expect(state.df!.nrow).toBe(origN);
+    expect(state.color.encoding.kind).toBe("paint");
   });
 
-  it("runClassification works with categorical class source", () => {
+  it("runClassification works with categorical class source", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
       makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
@@ -137,6 +139,7 @@ describe("ClassificationSlice", () => {
     useAppStore.getState().setClassificationVariables(["a", "b"]);
     useAppStore.getState().setClassificationGridResolution(3);
     useAppStore.getState().runClassification();
+    await tick();
 
     const c = useAppStore.getState().classification;
     expect(c.error).toBeNull();
@@ -146,7 +149,7 @@ describe("ClassificationSlice", () => {
     expect(c.classSource).toBe("group");
   });
 
-  it("runClassification produces misclassified array and predictions", () => {
+  it("runClassification produces misclassified array and predictions", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
       makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
@@ -155,6 +158,7 @@ describe("ClassificationSlice", () => {
     useAppStore.getState().setSelectionPaint(new Uint8Array([1, 1, 2, 2]));
     useAppStore.getState().setClassificationVariables(["a", "b"]);
     useAppStore.getState().runClassification();
+    await tick();
 
     const c = useAppStore.getState().classification;
     expect(c.predictions).not.toBeNull();
@@ -163,7 +167,7 @@ describe("ClassificationSlice", () => {
     expect(c.misclassified!.length).toBe(df.nrow);
   });
 
-  it("applyClassificationBoundaries marks misclassified points with shape", () => {
+  it("applyClassificationBoundaries sets misclassified shape and paint encoding", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([0, 5, 10])),
       makeNumericColumn("b", new Float64Array([0, 5, 10])),
@@ -173,12 +177,15 @@ describe("ClassificationSlice", () => {
     useAppStore.getState().setClassificationVariables(["a", "b"]);
     useAppStore.getState().setClassificationGridResolution(2);
     useAppStore.getState().runClassification();
+    await tick();
     useAppStore.getState().applyClassificationBoundaries();
-    const s = useAppStore.getState().selection;
+    const state = useAppStore.getState();
+    const s = state.selection;
     for (let i = 0; i < 3; i++) {
       if (useAppStore.getState().classification.misclassified![i]) {
-        expect(s.shape[i]).toBe(3);
+        expect(s.shape[i]).toBe(5);
       }
     }
+    expect(state.color.encoding.kind).toBe("paint");
   });
 });
