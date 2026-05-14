@@ -3,6 +3,9 @@ import { Layout } from "@/app/Layout";
 import { PlotGrid } from "@/app/PlotGrid";
 import { VariablePanel } from "@/app/VariablePanel";
 import { TourPanel } from "@/app/TourPanel";
+import { ClusteringPanel } from "@/app/ClusteringPanel";
+import { ClassificationPanel } from "@/app/ClassificationPanel";
+import { ProjectionPanel } from "@/app/ProjectionPanel";
 import { VariableCircle } from "@/app/VariableCircle";
 import { SavedViews } from "@/app/SavedViews";
 import { EmptyState } from "@/app/EmptyState";
@@ -15,6 +18,7 @@ import { EdgesToolbar } from "@/app/EdgesToolbar";
 import { CaseList } from "@/app/CaseList";
 import type { LoadedData } from "@/app/loadFile";
 import type { ColumnType, DataFrame } from "@/lib/data/types";
+import { coerceDataFrame } from "@/lib/data/coerce";
 import { useAppStore } from "@/store";
 import { bitGet } from "@/lib/brush/hitTest";
 import { useTourWorker } from "@/lib/tour/useTourWorker";
@@ -29,6 +33,7 @@ export function App() {
   const clear = useAppStore((s) => s.clear);
   const selection = useAppStore((s) => s.selection);
   const tools = useAppStore((s) => s.tools);
+  const [rightTab, setRightTab] = useState<"tour" | "projection" | "clustering" | "classification">("tour");
   const [pending, setPending] = useState<LoadedData | null>(null);
 
   const commit = (committed: LoadedData, overrides: Record<string, ColumnType>) => {
@@ -91,14 +96,20 @@ export function App() {
         toolbar={toolbar}
         left={<VariablePanel />}
         main={main}
-        right={
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <TourPanel />
-            <VariableCircle />
-            <SavedViews />
-            <CaseList />
-          </div>
-        }
+      right={
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="right-tabs">
+        <button className={rightTab === "tour" ? "right-tab active" : "right-tab"} onClick={() => setRightTab("tour")}>Tour</button>
+        <button className={rightTab === "projection" ? "right-tab active" : "right-tab"} onClick={() => setRightTab("projection")}>Project</button>
+        <button className={rightTab === "clustering" ? "right-tab active" : "right-tab"} onClick={() => setRightTab("clustering")}>Cluster</button>
+        <button className={rightTab === "classification" ? "right-tab active" : "right-tab"} onClick={() => setRightTab("classification")}>Classify</button>
+      </div>
+      {rightTab === "tour" ? <TourPanel /> : rightTab === "projection" ? <ProjectionPanel /> : rightTab === "clustering" ? <ClusteringPanel /> : <ClassificationPanel />}
+          {rightTab === "tour" && <VariableCircle />}
+          <SavedViews />
+          <CaseList />
+        </div>
+      }
         status={status}
       />
       {dfToCommit && (
@@ -113,9 +124,6 @@ export function App() {
 }
 
 function applyOverrides(df: DataFrame, overrides: Record<string, ColumnType>): DataFrame {
-  // M1 limitation carries forward to M2: overrides are advisory only.
-  // Real coercion lives in a later milestone (re-inference under the
-  // schema-preview UI). Reading `overrides` here keeps it in scope.
   if (Object.keys(overrides).length === 0) return df;
-  return df;
+  return coerceDataFrame(df, overrides);
 }

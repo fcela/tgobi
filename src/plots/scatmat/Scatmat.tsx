@@ -10,6 +10,8 @@ import {
   bitSet,
   type Point2D,
 } from "@/lib/brush/hitTest";
+import { formatRowLabel } from "@/lib/data/format";
+import { resolveScaledValues } from "@/lib/data/resolveScaling";
 import { categoricalScale, sequentialScale, divergingScale } from "@/lib/color/scales";
 import { getPalette } from "@/lib/color/palettes";
 import {
@@ -31,15 +33,20 @@ export interface ScatmatProps {
 
 export function Scatmat({ panel }: ScatmatProps) {
   const df = useAppStore((s) => s.df);
+  const spec = useAppStore((s) => s.spec);
   const selection = useAppStore((s) => s.selection);
   const colorState = useAppStore((s) => s.color);
   const brush = useAppStore((s) => s.brush);
   const edges = useAppStore((s) => s.edges);
   const activeTool = useAppStore((s) => s.tools.active);
+  const pinnedRows = useAppStore((s) => s.tools.pinnedRows);
+  const labelVar = useAppStore((s) => s.tools.labelVar);
   const setActiveBrush = useAppStore((s) => s.setActiveBrush);
   const setSelectionMask = useAppStore((s) => s.setSelectionMask);
   const setSelectionPaint = useAppStore((s) => s.setSelectionPaint);
   const setSelectionShape = useAppStore((s) => s.setSelectionShape);
+  const setIdentifyHover = useAppStore((s) => s.setIdentifyHover);
+  const togglePinnedIdentify = useAppStore((s) => s.togglePinnedIdentify);
   const removePanel = useAppStore((s) => s.removePanel);
 
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -54,16 +61,19 @@ export function Scatmat({ panel }: ScatmatProps) {
 
   const [tip, setTip] = useState<{ text: string; px: number; py: number } | null>(null);
   const [alpha, setAlpha] = useState(1);
+  const [labels, setLabels] = useState<PinnedLabel[]>([]);
 
-  // Resolved columns for each variable in panel.variables
+  // Resolved columns for each variable in panel.variables, with scaling applied
   const cols = useMemo(() => {
     if (!df) return [];
     return panel.variables.map((v) => {
       const c = df.column(v);
       if (!c || (c.type !== "numeric" && c.type !== "integer")) return null;
-      return c as Extract<typeof c, { type: "numeric" | "integer" }>;
+      const vs = spec.find((s) => s.name === v);
+      const resolved = resolveScaledValues(c, vs);
+      return { type: c.type as "numeric" | "integer", name: c.name, length: c.length, values: resolved.values, missing: { buffer: resolved.missingBuffer, isMissing: c.missing.isMissing.bind(c.missing) } };
     });
-  }, [df, panel.variables]);
+  }, [df, panel.variables, spec]);
 
   // Per-row colors
   const colors: ReadonlyArray<string> = useMemo(() => {
@@ -166,23 +176,28 @@ export function Scatmat({ panel }: ScatmatProps) {
 
   const requestPaint = () => {
     if (paintHandle.current != null) return;
-    paintHandle.current = requestAnimationFrame(() => {
+    paintHandle.current = -1;
+    const handle = requestAnimationFrame(() => {
       paintHandle.current = null;
       paint();
     });
+    if (paintHandle.current === -1) paintHandle.current = handle;
   };
 
   const paint = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
     if (!df) return;
     const { w, h } = sizeRef.current;
     if (w < 1 || h < 1) return;
 
     const n = panel.variables.length;
     const layout = computeLayout(w, h, n);
+    updatePinnedLabels(layout);
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
     const visual: VisualState = {
       color: colors,
       alpha,
@@ -237,25 +252,7 @@ export function Scatmat({ panel }: ScatmatProps) {
         );
 
         // Build kd-tree lazily
-        const key = `${i},${j}`;
-        if (!treeCache.current.has(key)) {
-          const xy = cellPixelPositions(
-            cell,
-            xCol.values,
-            xCol.missing.buffer,
-            yCol.values,
-            yCol.missing.buffer,
-          );
-          try {
-            // Filter out NaN rows before building tree
-            const validCount = xy.reduce((acc, _, idx) => idx % 2 === 0 ? (!isNaN(xy[idx]!) ? acc + 1 : acc) : acc, 0);
-            if (validCount > 0) {
-              treeCache.current.set(key, new KdTree2D(xy));
-            }
-          } catch {
-            // ignore — kd-tree build can fail on degenerate data
-          }
-        }
+        getTreeForCell(i, j, layout);
       }
     }
   };
@@ -265,10 +262,17 @@ export function Scatmat({ panel }: ScatmatProps) {
     const body = bodyRef.current;
     const canvas = canvasRef.current;
     if (!body || !canvas) return;
-    const ro = new ResizeObserver(() => {
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
       const rect = body.getBoundingClientRect();
-      const cssW = Math.max(1, Math.floor(rect.width));
-      const cssH = Math.max(1, Math.floor(rect.height));
+      const cssW = Math.max(
+        1,
+        Math.floor(entry?.contentBoxSize[0]?.inlineSize ?? entry?.contentRect.width ?? rect.width),
+      );
+      const cssH = Math.max(
+        1,
+        Math.floor(entry?.contentBoxSize[0]?.blockSize ?? entry?.contentRect.height ?? rect.height),
+      );
       const dpr = window.devicePixelRatio || 1;
       canvas.width = cssW * dpr;
       canvas.height = cssH * dpr;
@@ -288,7 +292,7 @@ export function Scatmat({ panel }: ScatmatProps) {
   useEffect(() => {
     requestPaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, cols, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, edgeOverlay, alpha]);
+  }, [df, cols, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, edgeOverlay, alpha, pinnedRows, labelVar]);
 
   // Track which cell the current drag started in
   const activeDragCell = useRef<{ i: number; j: number } | null>(null);
@@ -300,11 +304,7 @@ export function Scatmat({ panel }: ScatmatProps) {
     localMask: Uint8Array;
   } | null>(null);
 
-  const getCellFromEvent = (e: React.MouseEvent<HTMLCanvasElement>): { i: number; j: number; layout: ScatmatLayout } | null => {
-    const canvas = e.currentTarget as HTMLCanvasElement;
-    const rect = canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
+  const getCellFromPoint = (px: number, py: number): { i: number; j: number; layout: ScatmatLayout } | null => {
     const { w, h } = sizeRef.current;
     const n = panel.variables.length;
     const layout = computeLayout(w, h, n);
@@ -313,7 +313,37 @@ export function Scatmat({ panel }: ScatmatProps) {
     return { ...cell, layout };
   };
 
+  const getCellFromEvent = (e: React.MouseEvent<HTMLCanvasElement>): { i: number; j: number; layout: ScatmatLayout } | null => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    return getCellFromPoint(px, py);
+  };
+
+  const identifyRowAt = (x: number, y: number): { row: number; i: number; j: number } | null => {
+    if (!df) return null;
+    const hit = getCellFromPoint(x, y);
+    if (!hit || hit.i === hit.j) return null;
+    const tree = getTreeForCell(hit.i, hit.j, hit.layout);
+    if (!tree) return null;
+    const row = tree.nearest(x, y);
+    return row >= 0 ? { row, i: hit.i, j: hit.j } : null;
+  };
+
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (activeTool === "identify") {
+      const canvas = e.currentTarget as HTMLCanvasElement;
+      const canvasRect = canvas.getBoundingClientRect();
+      const x = e.clientX - canvasRect.left;
+      const y = e.clientY - canvasRect.top;
+      const hit = identifyRowAt(x, y);
+      if (hit) {
+        setIdentifyHover(hit.row);
+        togglePinnedIdentify(hit.row);
+      }
+      return;
+    }
     if (activeTool !== "brush") return;
     if (!df) return;
     const hit = getCellFromEvent(e);
@@ -336,28 +366,23 @@ export function Scatmat({ panel }: ScatmatProps) {
     const y = e.clientY - canvasRect.top;
 
     if (activeTool === "identify" && df) {
-      const hit = getCellFromEvent(e);
-      if (hit && hit.i !== hit.j) {
-        const key = `${hit.i},${hit.j}`;
-        const tree = treeCache.current.get(key);
-        if (tree) {
-          const rowIdx = tree.nearest(x, y);
-          if (rowIdx >= 0) {
-            const xVar = panel.variables[hit.j]!;
-            const yVar = panel.variables[hit.i]!;
-            const xCol = cols[hit.j];
-            const yCol = cols[hit.i];
-            const xv = xCol ? xCol.values[rowIdx] : "?";
-            const yv = yCol ? yCol.values[rowIdx] : "?";
-            setTip({
-              text: `row ${rowIdx + 1}: ${xVar}=${xv}, ${yVar}=${yv}`,
-              px: x + 8,
-              py: y + 8,
-            });
-            return;
-          }
-        }
+      const hit = identifyRowAt(x, y);
+      if (hit) {
+        setIdentifyHover(hit.row);
+        const xVar = panel.variables[hit.j]!;
+        const yVar = panel.variables[hit.i]!;
+        const xCol = cols[hit.j];
+        const yCol = cols[hit.i];
+        const xv = xCol ? xCol.values[hit.row] : "?";
+        const yv = yCol ? yCol.values[hit.row] : "?";
+        setTip({
+          text: `row ${hit.row + 1}: ${xVar}=${xv}, ${yVar}=${yv}`,
+          px: x + 8,
+          py: y + 8,
+        });
+        return;
       }
+      setIdentifyHover(null);
       setTip(null);
       return;
     }
@@ -418,6 +443,7 @@ export function Scatmat({ panel }: ScatmatProps) {
 
   const onMouseLeave = () => {
     setTip(null);
+    setIdentifyHover(null);
     if (dragRef.current) onMouseUp();
   };
 
@@ -461,6 +487,16 @@ export function Scatmat({ panel }: ScatmatProps) {
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseLeave}
         />
+        {labels.map((label) => (
+          <div
+            key={label.row}
+            className="plot-label"
+            data-testid={`pinned-scatmat-label-${label.row}`}
+            style={{ left: label.x, top: label.y }}
+          >
+            {label.label}
+          </div>
+        ))}
       </div>
       {tip && (
         <div className="plot-tooltip" style={{ left: tip.px, top: tip.py }}>
@@ -469,6 +505,92 @@ export function Scatmat({ panel }: ScatmatProps) {
       )}
     </div>
   );
+
+  function getTreeForCell(i: number, j: number, layout: ScatmatLayout): KdTree2D | null {
+    const key = `${i},${j}`;
+    const cached = treeCache.current.get(key);
+    if (cached) return cached;
+
+    const cell = layout.cells[i]?.[j];
+    const xCol = cols[j];
+    const yCol = cols[i];
+    if (!cell || !xCol || !yCol) return null;
+
+    const xy = cellPixelPositions(
+      cell,
+      xCol.values,
+      xCol.missing.buffer,
+      yCol.values,
+      yCol.missing.buffer,
+    );
+    try {
+      const validCount = xy.reduce(
+        (acc, _, idx) => idx % 2 === 0 ? (!Number.isNaN(xy[idx]!) ? acc + 1 : acc) : acc,
+        0,
+      );
+      if (validCount <= 0) return null;
+      const tree = new KdTree2D(xy);
+      treeCache.current.set(key, tree);
+      return tree;
+    } catch {
+      return null;
+    }
+  }
+
+  function updatePinnedLabels(layout: ScatmatLayout) {
+    if (!df || layout.n < 2) {
+      setLabels((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+
+    const cell = layout.cells[0]?.[1];
+    const xCol = cols[1];
+    const yCol = cols[0];
+    if (!cell || !xCol || !yCol) {
+      setLabels((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+
+    const { w, h } = sizeRef.current;
+    const xy = cellPixelPositions(
+      cell,
+      xCol.values,
+      xCol.missing.buffer,
+      yCol.values,
+      yCol.missing.buffer,
+    );
+    const next: PinnedLabel[] = [];
+    for (let row = 0; row < df.nrow; row++) {
+      if (!bitGet(pinnedRows, row)) continue;
+      const x = xy[2 * row];
+      const y = xy[2 * row + 1];
+      if (x == null || y == null || Number.isNaN(x) || Number.isNaN(y)) continue;
+      next.push({
+        row,
+        x: Math.max(2, Math.min(x + 6, Math.max(2, w - 148))),
+        y: Math.max(8, Math.min(y - 6, h - 8)),
+        label: formatRowLabel(df, row, labelVar),
+      });
+    }
+    setLabels((prev) => samePinnedLabels(prev, next) ? prev : next);
+  }
+}
+
+interface PinnedLabel {
+  row: number;
+  x: number;
+  y: number;
+  label: string;
+}
+
+function samePinnedLabels(a: ReadonlyArray<PinnedLabel>, b: ReadonlyArray<PinnedLabel>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.row !== y.row || x.x !== y.x || x.y !== y.y || x.label !== y.label) return false;
+  }
+  return true;
 }
 
 function appendLassoPoint(path: Point2D[], point: Point2D): Point2D[] {

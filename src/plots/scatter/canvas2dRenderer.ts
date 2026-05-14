@@ -5,12 +5,13 @@ import type {
   ScatterRenderer,
   ScatterRenderState,
   ScatterTransform,
+  ScatterViewport,
 } from "@/plots/scatter/types";
 import { bitGet } from "@/lib/brush/hitTest";
 import { drawHullOverlay } from "@/plots/scatter/overlay2d";
 
 const MARGIN = 28; // inner plot margin in px
-const POINT_R = 2.5; // base point radius
+const POINT_R = 2.5; // default point radius
 const SHADOW_ALPHA = 0.15;
 const HALO_R = 4.5; // selected halo radius
 const HALO_ALPHA = 0.85;
@@ -57,6 +58,7 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
   #yMissing: Uint8Array | null = null;
 
   #xMin = 0; #xMax = 1; #yMin = 0; #yMax = 1;
+  #viewport: ScatterViewport | null = null;
 
   attach(canvas: HTMLCanvasElement): void {
     this.#canvas = canvas;
@@ -100,9 +102,22 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     this.#xMin = xmin; this.#xMax = xmax; this.#yMin = ymin; this.#yMax = ymax;
   }
 
+  setViewport(viewport: ScatterViewport | null): void {
+    this.#viewport = viewport ? normalizeViewport(viewport) : null;
+  }
+
+  getDataBounds(): ScatterViewport {
+    return { xMin: this.#xMin, xMax: this.#xMax, yMin: this.#yMin, yMax: this.#yMax };
+  }
+
+  getViewBounds(): ScatterViewport {
+    return this.#viewport ?? this.getDataBounds();
+  }
+
   transform(): ScatterTransform {
     const w = this.#w, h = this.#h;
-    const xMin = this.#xMin, xMax = this.#xMax, yMin = this.#yMin, yMax = this.#yMax;
+    const view = this.getViewBounds();
+    const xMin = view.xMin, xMax = view.xMax, yMin = view.yMin, yMax = view.yMax;
     const innerW = Math.max(1, w - 2 * MARGIN);
     const innerH = Math.max(1, h - 2 * MARGIN);
     return {
@@ -137,19 +152,25 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     const x = this.#x, y = this.#y;
     const xm = this.#xMissing, ym = this.#yMissing;
     const n = x.length;
+    const pointR = Math.max(0.5, visual.pointSize || POINT_R);
+    const haloR = Math.max(pointR + 2, HALO_R);
 
     drawEdges(ctx, edgeOverlay, t, x, y, xm, ym, visual.shadow);
     drawHullOverlay(ctx, hullOverlay);
 
-    // pass 1: shadowed (behind everything except edges, faint)
-    for (let i = 0; i < n; i++) {
-      if (bitGet(xm, i) || bitGet(ym, i)) continue;
-      if (!bitGet(visual.shadow, i)) continue;
-      const p = t.toPx(x[i]!, y[i]!);
-      ctx.globalAlpha = SHADOW_ALPHA;
-      ctx.fillStyle = visual.color[i] ?? "#cccccc";
-      drawMarker(ctx, p.x, p.y, POINT_R, visual.shape[i] ?? 0);
-    }
+  // pass 1: shadowed (behind everything except edges, faint)
+  for (let i = 0; i < n; i++) {
+    if (bitGet(xm, i) || bitGet(ym, i)) continue;
+    if (!bitGet(visual.shadow, i)) continue;
+    const p = t.toPx(x[i]!, y[i]!);
+    ctx.globalAlpha = SHADOW_ALPHA;
+    const paintIdx = visual.paint[i]!;
+    const fill = paintIdx > 0
+      ? (visual.paintPalette[paintIdx - 1] ?? visual.color[i] ?? "#cccccc")
+      : (visual.color[i] ?? "#cccccc");
+    ctx.fillStyle = fill;
+    drawMarker(ctx, p.x, p.y, pointR, visual.shape[i] ?? 0);
+  }
     ctx.globalAlpha = 1;
 
   // pass 2: regular non-shadowed points
@@ -163,26 +184,61 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
   : (visual.color[i] ?? "#cccccc");
   ctx.globalAlpha = visual.alpha;
   ctx.fillStyle = fill;
-  drawMarker(ctx, p.x, p.y, POINT_R, visual.shape[i] ?? 0);
+  drawMarker(ctx, p.x, p.y, pointR, visual.shape[i] ?? 0);
   }
   ctx.globalAlpha = 1;
 
-    // pass 3: selected halos drawn last
+  // pass 3: selected halos drawn last
+  for (let i = 0; i < n; i++) {
+    if (bitGet(xm, i) || bitGet(ym, i)) continue;
+    if (!bitGet(visual.selected, i)) continue;
+    if (bitGet(visual.shadow, i)) continue;
+    const p = t.toPx(x[i]!, y[i]!);
+    ctx.globalAlpha = HALO_ALPHA;
+    ctx.strokeStyle = "#ffd400";
+    ctx.lineWidth = 1.5;
+    drawMarker(ctx, p.x, p.y, haloR, visual.shape[i] ?? 0, true);
+  }
+  ctx.globalAlpha = 1;
+
+  // pass 3.5: marginal/rug glyphs for rows missing one axis
+  if (visual.showMarginals) {
+    const rugLen = 6;
+    ctx.globalAlpha = visual.alpha * 0.6;
     for (let i = 0; i < n; i++) {
-      if (bitGet(xm, i) || bitGet(ym, i)) continue;
-      if (!bitGet(visual.selected, i)) continue;
-      if (bitGet(visual.shadow, i)) continue;
-      const p = t.toPx(x[i]!, y[i]!);
-      ctx.globalAlpha = HALO_ALPHA;
-      ctx.strokeStyle = "#ffd400";
-      ctx.lineWidth = 1.5;
-      drawMarker(ctx, p.x, p.y, HALO_R, visual.shape[i] ?? 0, true);
+      const xMiss = bitGet(xm, i);
+      const yMiss = bitGet(ym, i);
+      if (xMiss && yMiss) continue;
+      if (!xMiss && !yMiss) continue;
+      const fill = visual.color[i] ?? "#cccccc";
+      ctx.fillStyle = fill;
+      if (xMiss && !yMiss) {
+        const p = t.toPx(this.#xMin!, y[i]!);
+        ctx.fillRect(MARGIN - rugLen, p.y - 1, rugLen, 2);
+      } else if (!xMiss && yMiss) {
+        const p = t.toPx(x[i]!, this.#yMin!);
+        ctx.fillRect(p.x - 1, MARGIN + (h - 2 * MARGIN) + 1, 2, rugLen);
+      }
     }
     ctx.globalAlpha = 1;
+  }
 
     // pass 4: active brush overlay
     drawBrushOverlay(ctx, activeBrush);
   }
+}
+
+function normalizeViewport(viewport: ScatterViewport): ScatterViewport {
+  const xMin = Math.min(viewport.xMin, viewport.xMax);
+  const xMax = Math.max(viewport.xMin, viewport.xMax);
+  const yMin = Math.min(viewport.yMin, viewport.yMax);
+  const yMax = Math.max(viewport.yMin, viewport.yMax);
+  return {
+    xMin,
+    xMax: xMax === xMin ? xMin + 1 : xMax,
+    yMin,
+    yMax: yMax === yMin ? yMin + 1 : yMax,
+  };
 }
 
 function drawEdges(

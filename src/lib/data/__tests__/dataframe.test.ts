@@ -86,4 +86,14 @@ describe("ArrayDataFrame.derive", () => {
     expect(d2.column("log_x")).toBeDefined();
     expect(d2.column("z")).toBeDefined();
   });
+
+  it("derives power transforms", () => {
+    const base = new ArrayDataFrame([
+      makeNumericColumn("x", new Float64Array([2, 3])),
+    ]);
+    const derived = base.derive("x2", { kind: "power", source: "x", exponent: 2 });
+    const x2 = derived.column("x2");
+    expect(x2?.type).toBe("numeric");
+    if (x2?.type === "numeric") expect(Array.from(x2.values)).toEqual([4, 9]);
+  });
 });

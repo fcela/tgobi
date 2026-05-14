@@ -79,6 +79,16 @@ describe("Parcoords", () => {
     expect(screen.getByText(/parcoords/i)).toBeInTheDocument();
   });
 
+  it("renders labels for pinned identify rows", async () => {
+    useAppStore.getState().togglePinnedIdentify(1);
+
+    render(
+      <Parcoords panel={{ id: 11, kind: "parcoords", variables: ["a", "b", "c"] }} />,
+    );
+
+    expect(await screen.findByTestId("pinned-parcoords-label-1")).toHaveTextContent("row 2");
+  });
+
   it("persistent brushing paints rows when mouseup happens outside the canvas", () => {
     useAppStore.getState().setBrushMode("persistent");
     useAppStore.getState().setPaintColor(4);

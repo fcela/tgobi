@@ -64,3 +64,68 @@ describe("tourPath k=2", () => {
     }
   });
 });
+
+describe("tourPath k=3", () => {
+  const A3d = makeMat(6, 3, new Float64Array([
+    1, 0, 0,
+    0, 1, 0,
+    0, 0, 1,
+    0, 0, 0,
+    0, 0, 0,
+    0, 0, 0,
+  ]));
+  const B3d = makeMat(6, 3, new Float64Array([
+    0, 0, 0,
+    0, 0, 0,
+    0, 0, 0,
+    0, 1, 0,
+    0, 0, 1,
+    1, 0, 0,
+  ]));
+
+  it("returns an orthonormal frame at every t", () => {
+    const path = tourPath(A3d, B3d);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const M = path(t);
+      for (let c1 = 0; c1 < 3; c1++) {
+        for (let c2 = c1; c2 < 3; c2++) {
+          let dot = 0;
+          for (let i = 0; i < 6; i++) dot += M.values[i * 3 + c1]! * M.values[i * 3 + c2]!;
+          const expected = c1 === c2 ? 1 : 0;
+          expect(close(dot, expected, 1e-6)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("t=0 returns an orthonormal frame and t=1 returns a different orthonormal frame", () => {
+    const path = tourPath(A3d, B3d);
+    const M0 = path(0);
+    const M1 = path(1);
+    for (const M of [M0, M1]) {
+      for (let c1 = 0; c1 < 3; c1++) {
+        for (let c2 = c1; c2 < 3; c2++) {
+          let dot = 0;
+          for (let i = 0; i < 6; i++) dot += M.values[i * 3 + c1]! * M.values[i * 3 + c2]!;
+          const expected = c1 === c2 ? 1 : 0;
+          expect(close(dot, expected, 1e-6)).toBe(true);
+        }
+      }
+    }
+    let same = true;
+    for (let i = 0; i < 18; i++) {
+      if (!close(M0.values[i]!, M1.values[i]!, 1e-6)) { same = false; break; }
+    }
+    expect(same).toBe(false);
+  });
+
+  it("interpolates smoothly — midpoint has non-zero entries", () => {
+    const path = tourPath(A3d, B3d);
+    const M = path(0.5);
+    let anyNonzero = false;
+    for (let i = 0; i < 18; i++) {
+      if (Math.abs(M.values[i]!) > 1e-6) anyNonzero = true;
+    }
+    expect(anyNonzero).toBe(true);
+  });
+});

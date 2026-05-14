@@ -19,10 +19,11 @@ describe("TourSlice", () => {
     expect(t.shape).toBe("2d");
     expect(t.mode).toBe("grand");
     expect(t.ppIndex).toBe("holes");
-    expect(t.ppClassVar).toBeNull();
     expect(t.ppValue).toBeNull();
     expect(t.isPlaying).toBe(false);
     expect(t.frozenVars).toEqual([]);
+    expect(t.manualVar).toBeNull();
+    expect(t.manualValue).toBe(0);
     expect(t.savedViews).toEqual([]);
   });
 
@@ -72,7 +73,6 @@ describe("TourSlice", () => {
   it("sets projection pursuit mode, index, and score", () => {
     useAppStore.getState().setTourMode("pp");
     useAppStore.getState().setTourPpIndex("lda");
-    useAppStore.getState().setTourPpClassVar("species");
     useAppStore.getState().setTourFrame(
       new Float64Array([1, 0, 0, 1]),
       new Float64Array([0.1, 0.2, 0.3, 0.4]),
@@ -82,7 +82,6 @@ describe("TourSlice", () => {
     const t = useAppStore.getState().tour;
     expect(t.mode).toBe("pp");
     expect(t.ppIndex).toBe("lda");
-    expect(t.ppClassVar).toBe("species");
     expect(t.ppValue).toBe(1.25);
   });
 
@@ -95,6 +94,28 @@ describe("TourSlice", () => {
     useAppStore.getState().toggleTourVarFrozen("c");
     useAppStore.getState().setTourActiveVars(["a", "b"]);
     expect(useAppStore.getState().tour.frozenVars).toEqual([]);
+  });
+
+  it("setManualVarValue freezes and sets manual value", () => {
+    useAppStore.getState().startTour(1, "2d", ["a", "b", "c"]);
+    useAppStore.getState().setManualVarValue("b", 0.7);
+    const t = useAppStore.getState().tour;
+    expect(t.frozenVars).toContain("b");
+    expect(t.manualVar).toBe("b");
+    expect(t.manualValue).toBe(0.7);
+  });
+
+  it("setManualVarValue is a no-op for inactive variable", () => {
+    useAppStore.getState().startTour(1, "2d", ["a", "b"]);
+    useAppStore.getState().setManualVarValue("z", 0.5);
+    const t = useAppStore.getState().tour;
+    expect(t.frozenVars).toEqual([]);
+    expect(t.manualVar).toBeNull();
+  });
+
+  it("setTourMode supports manual", () => {
+    useAppStore.getState().setTourMode("manual");
+    expect(useAppStore.getState().tour.mode).toBe("manual");
   });
 
   it("saveCurrentView and restoreView", () => {

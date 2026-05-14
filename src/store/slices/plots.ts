@@ -1,5 +1,15 @@
 import type { StateCreator } from "zustand";
-import type { AppStore, PlotsSlice, TileDropPosition, TileId, TileLeaf, TileNode } from "@/store/types";
+import type {
+  AppStore,
+  PlotsSlice,
+  PlotViewport,
+  Scatter3DPanel,
+  TileDropPosition,
+  TileId,
+  TileLeaf,
+  TileNode,
+} from "@/store/types";
+import type { Camera3D } from "@/plots/scatter3d/types";
 
 let tileCounter = 0;
 function nextTileId(): TileId {
@@ -74,6 +84,19 @@ function dropSide(position: TileDropPosition): "first" | "second" {
   return position === "left" || position === "top" ? "first" : "second";
 }
 
+function normalizeViewport(viewport: PlotViewport): PlotViewport {
+  const xMin = Math.min(viewport.xMin, viewport.xMax);
+  const xMax = Math.max(viewport.xMin, viewport.xMax);
+  const yMin = Math.min(viewport.yMin, viewport.yMax);
+  const yMax = Math.max(viewport.yMin, viewport.yMax);
+  return {
+    xMin,
+    xMax: xMax === xMin ? xMin + 1 : xMax,
+    yMin,
+    yMax: yMax === yMin ? yMin + 1 : yMax,
+  };
+}
+
 function insertPanelIntoTile(
   root: TileNode,
   tileId: TileId,
@@ -141,6 +164,17 @@ export const createPlotsSlice: StateCreator<AppStore, [], [], PlotsSlice> = (set
     });
     return id;
   },
+  setScatterViewport: (id, viewport) =>
+    set((s) => ({
+      plots: {
+        ...s.plots,
+        panels: s.plots.panels.map((panel) =>
+          panel.id === id && panel.kind === "scatter"
+            ? { ...panel, viewport: viewport ? normalizeViewport(viewport) : null }
+            : panel,
+        ),
+      },
+    })),
   addBarchart: (variable, bins = 10) => {
     const id = get().plots.nextId;
     const panel = { id, kind: "barchart" as const, variable, bins };
@@ -278,6 +312,144 @@ export const createPlotsSlice: StateCreator<AppStore, [], [], PlotsSlice> = (set
     });
     return id;
   },
+  addMissingPattern: () => {
+    const id = get().plots.nextId;
+    const panel = { id, kind: "missingPattern" as const };
+    set((s) => {
+      let root = s.plots.root;
+      if (!root) {
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = leaf;
+      } else {
+        const existingRoot = root;
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = {
+          type: "split",
+          id: nextTileId(),
+          direction: "horizontal",
+          ratio: 0.5,
+          first: existingRoot,
+          second: leaf,
+        };
+      }
+      return {
+        plots: {
+          ...s.plots,
+          panels: [...s.plots.panels, panel],
+          nextId: id + 1,
+          root,
+        },
+      };
+    });
+    return id;
+  },
+  addTimeseries: (x, y, groupVar = null, display = "points+lines") => {
+    if (y.length === 0) throw new Error("addTimeseries: need at least 1 y variable");
+    const id = get().plots.nextId;
+    const panel = { id, kind: "timeseries" as const, x, y, groupVar, display };
+    set((s) => {
+      let root = s.plots.root;
+      if (!root) {
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = leaf;
+      } else {
+        const existingRoot = root;
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = {
+          type: "split",
+          id: nextTileId(),
+          direction: "horizontal",
+          ratio: 0.5,
+          first: existingRoot,
+          second: leaf,
+        };
+      }
+      return {
+        plots: {
+          ...s.plots,
+          panels: [...s.plots.panels, panel],
+          nextId: id + 1,
+          root,
+        },
+      };
+    });
+    return id;
+  },
+  setTimeseriesViewport: (id, viewport) =>
+    set((s) => ({
+      plots: {
+        ...s.plots,
+        panels: s.plots.panels.map((panel) =>
+          panel.id === id && panel.kind === "timeseries"
+            ? { ...panel, viewport: viewport ? normalizeViewport(viewport) : null }
+            : panel,
+        ),
+      },
+    })),
+  setTimeseriesDisplay: (id, display) =>
+    set((s) => ({
+      plots: {
+        ...s.plots,
+        panels: s.plots.panels.map((panel) =>
+          panel.id === id && panel.kind === "timeseries"
+            ? { ...panel, display }
+            : panel,
+        ),
+      },
+    })),
+  addScatter3D: (x, y, z) => {
+    const id = get().plots.nextId;
+    const panel: Scatter3DPanel = { id, kind: "scatter3d", x, y, z, depthCue: "alpha" };
+    set((s) => {
+      let root = s.plots.root;
+      if (!root) {
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = leaf;
+      } else {
+        const existingRoot = root;
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = {
+          type: "split",
+          id: nextTileId(),
+          direction: "horizontal",
+          ratio: 0.5,
+          first: existingRoot,
+          second: leaf,
+        };
+      }
+      return {
+        plots: {
+          ...s.plots,
+          panels: [...s.plots.panels, panel],
+          nextId: id + 1,
+          root,
+        },
+      };
+    });
+    return id;
+  },
+  setScatter3DCamera: (id, camera) =>
+    set((s) => ({
+      plots: {
+        ...s.plots,
+        panels: s.plots.panels.map((panel) =>
+          panel.id === id && panel.kind === "scatter3d"
+            ? { ...panel, camera: camera ? { ...camera } : null }
+            : panel,
+        ),
+      },
+    })),
+  setScatter3DDepthCue: (id, depthCue) =>
+    set((s) => ({
+      plots: {
+        ...s.plots,
+        panels: s.plots.panels.map((panel) =>
+          panel.id === id && panel.kind === "scatter3d"
+            ? { ...panel, depthCue }
+            : panel,
+        ),
+      },
+    })),
   removePanel: (id) =>
     set((s) => {
       const root = s.plots.root ? removeFromTree(s.plots.root, id) : null;

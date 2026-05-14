@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { AppStore, TourSlice, SavedView } from "@/store/types";
+import type { AppStore, TourSlice, SavedView, TourShape } from "@/store/types";
 
 const DEFAULT_SPEED = 1200;
 
@@ -9,12 +9,13 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
     shape: "2d",
     mode: "grand",
     ppIndex: "holes",
-    ppClassVar: null,
     ppValue: null,
     isPlaying: false,
     speed: DEFAULT_SPEED,
     activeVars: [],
     frozenVars: [],
+    manualVar: null,
+    manualValue: 0,
     basis: null,
     proj: null,
     t: 0,
@@ -25,30 +26,33 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
   startTour: (panelId, shape, vars) =>
     set((s) => ({
       tour: { ...s.tour, activePanelId: panelId, shape, activeVars: vars,
-              frozenVars: [], isPlaying: true, basis: null, proj: null, ppValue: null, t: 0 },
+        frozenVars: [], manualVar: null, manualValue: 0, isPlaying: true, basis: null, proj: null, ppValue: null, t: 0 },
     })),
 
   pauseTour: () => set((s) => ({ tour: { ...s.tour, isPlaying: false } })),
   resumeTour: () => set((s) => ({ tour: { ...s.tour, isPlaying: true } })),
 
-  stopTour: () =>
-    set((s) => ({
-      tour: { ...s.tour, activePanelId: null, isPlaying: false,
-              frozenVars: [], basis: null, proj: null, ppValue: null, t: 0 },
-    })),
+stopTour: () =>
+  set((s) => ({
+    tour: { ...s.tour, activePanelId: null, isPlaying: false,
+      frozenVars: [], manualVar: null, manualValue: 0, basis: null, proj: null, ppValue: null, t: 0 },
+  })),
 
   setTourSpeed: (speed) => set((s) => ({ tour: { ...s.tour, speed } })),
-  setTourShape: (shape) => set((s) => ({ tour: { ...s.tour, shape } })),
-  setTourMode: (mode) => set((s) => ({ tour: { ...s.tour, mode, ppValue: null } })),
+  setTourShape: (shape: TourShape) => set((s) => ({ tour: { ...s.tour, shape } })),
+  setTourMode: (mode: "grand" | "pp" | "manual") => set((s) => ({ tour: { ...s.tour, mode, ppValue: null } })),
   setTourPpIndex: (ppIndex) => set((s) => ({ tour: { ...s.tour, ppIndex, ppValue: null } })),
-  setTourPpClassVar: (ppClassVar) => set((s) => ({ tour: { ...s.tour, ppClassVar, ppValue: null } })),
-  setTourActiveVars: (vars) => set((s) => ({
-    tour: {
-      ...s.tour,
-      activeVars: vars,
-      frozenVars: s.tour.frozenVars.filter((name) => vars.includes(name)),
-    },
-  })),
+  setTourActiveVars: (vars) => set((s) => {
+    const manualVar = s.tour.manualVar && vars.includes(s.tour.manualVar) ? s.tour.manualVar : null;
+    return {
+      tour: {
+        ...s.tour,
+        activeVars: vars,
+        frozenVars: s.tour.frozenVars.filter((name) => vars.includes(name)),
+        manualVar,
+      },
+    };
+  }),
 
   toggleTourVarFrozen: (name) => set((s) => {
     if (!s.tour.activeVars.includes(name)) return s;
@@ -56,6 +60,14 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
       ? s.tour.frozenVars.filter((v) => v !== name)
       : [...s.tour.frozenVars, name];
     return { tour: { ...s.tour, frozenVars: frozen } };
+  }),
+
+  setManualVarValue: (name, value) => set((s) => {
+    if (!s.tour.activeVars.includes(name)) return s;
+    const frozen = s.tour.frozenVars.includes(name)
+      ? s.tour.frozenVars
+      : [...s.tour.frozenVars, name];
+    return { tour: { ...s.tour, frozenVars: frozen, manualVar: name, manualValue: value } };
   }),
 
   setTourFrame: (basis, proj, t, ppValue) =>

@@ -2,9 +2,17 @@
   "name": "tgobi",
   "private": false,
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Interactive high-dimensional data visualization in the browser.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fcela/tgobi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fcela/tgobi/issues"
+  },
+  "homepage": "https://github.com/fcela/tgobi#readme",
   "keywords": [
     "ggobi",
     "visualization",
@@ -13,7 +21,7 @@
     "react"
   ],
   "bin": {
-    "tgobi": "./bin/tgobi.js"
+    "tgobi": "bin/tgobi.js"
   },
   "main": "./dist-lib/tgobi.umd.cjs",
   "module": "./dist-lib/tgobi.js",
@@ -28,6 +36,7 @@
   },
   "files": [
     "bin",
+    "docs/screenshots",
     "dist",
     "dist-lib",
     "LICENSE",
@@ -50,6 +59,13 @@
     "prepack": "npm run build"
   },
   "dependencies": {
+    "density-clustering": "^1.3.0",
+    "ml-hclust": "^4.0.0",
+    "ml-kmeans": "^7.0.0",
+    "ml-knn": "^3.0.0",
+    "ml-matrix": "^6.12.2",
+    "ml-naivebayes": "^4.0.0",
+    "ml-random-forest": "^2.1.0",
     "papaparse": "^5.5.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -65,7 +81,7 @@
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.3.0",
+    "@vitejs/plugin-react": "^6.0.1",
     "@vitest/ui": "^4.1.5",
     "jsdom": "^29.1.1",
     "typescript": "^5.6.0",

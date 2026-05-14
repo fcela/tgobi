@@ -7,9 +7,25 @@ import { Scatmat } from "@/plots/scatmat/Scatmat";
 
 // ResizeObserver stub (not available in jsdom)
 (global as unknown as Record<string, unknown>).ResizeObserver =
-  (global as unknown as Record<string, unknown>).ResizeObserver ??
   class {
-    observe() {}
+    #cb: ResizeObserverCallback;
+    constructor(cb: ResizeObserverCallback) {
+      this.#cb = cb;
+    }
+    observe(target: Element) {
+      this.#cb(
+        [
+          {
+            target,
+            contentRect: { width: 320, height: 220 } as DOMRectReadOnly,
+            contentBoxSize: [{ inlineSize: 320, blockSize: 220 }] as ResizeObserverSize[],
+            borderBoxSize: [{ inlineSize: 320, blockSize: 220 }] as ResizeObserverSize[],
+            devicePixelContentBoxSize: [{ inlineSize: 320, blockSize: 220 }] as ResizeObserverSize[],
+          } as unknown as ResizeObserverEntry,
+        ],
+        this as ResizeObserver,
+      );
+    }
     unobserve() {}
     disconnect() {}
   };
@@ -70,5 +86,15 @@ describe("Scatmat", () => {
     }).not.toThrow();
     // header should still be present
     expect(screen.getByText(/scatmat/i)).toBeInTheDocument();
+  });
+
+  it("renders labels for pinned identify rows", () => {
+    useAppStore.getState().togglePinnedIdentify(2);
+
+    render(
+      <Scatmat panel={{ id: 12, kind: "scatmat", variables: ["a", "b", "c"] }} />,
+    );
+
+    expect(screen.getByTestId("pinned-scatmat-label-2")).toHaveTextContent("row 3");
   });
 });

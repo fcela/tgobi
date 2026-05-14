@@ -27,6 +27,9 @@ const transformSpy = vi.fn(() => ({
   toPx: (x: number, y: number) => ({ x, y }),
   toData: (x: number, y: number) => ({ x, y }),
 }));
+const setViewportSpy = vi.fn();
+const dataBounds = { xMin: 1, xMax: 4, yMin: 1, yMax: 4 };
+let viewBounds = { ...dataBounds };
 
 vi.mock("@/plots/scatter/canvas2dRenderer", () => {
   function Canvas2DScatterRenderer() {
@@ -35,6 +38,9 @@ vi.mock("@/plots/scatter/canvas2dRenderer", () => {
       detach: vi.fn(),
       setData: vi.fn(),
       setSize: vi.fn(),
+      setViewport: setViewportSpy,
+      getDataBounds: vi.fn(() => dataBounds),
+      getViewBounds: vi.fn(() => viewBounds),
       draw: drawSpy,
       transform: transformSpy,
     };
@@ -45,6 +51,11 @@ vi.mock("@/plots/scatter/canvas2dRenderer", () => {
 beforeEach(() => {
   drawSpy.mockClear();
   transformSpy.mockClear();
+  setViewportSpy.mockClear();
+  viewBounds = { ...dataBounds };
+  setViewportSpy.mockImplementation((next) => {
+    viewBounds = next ? { ...next } : { ...dataBounds };
+  });
   useAppStore.getState().clear();
   useAppStore.getState().stopTour();
   useAppStore.getState().setActiveTool("brush");
@@ -68,6 +79,80 @@ describe("Scatter", () => {
       render(<Scatter panel={{ id: 1, kind: "scatter", x: "x", y: "y" }} />);
     });
     expect(drawSpy).toHaveBeenCalled();
+  });
+
+  it("renders a point size slider and passes the value to the renderer", async () => {
+    await act(async () => {
+      render(<Scatter panel={{ id: 1, kind: "scatter", x: "x", y: "y" }} />);
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("point size"), { target: { value: "6" } });
+    });
+
+    const visual = drawSpy.mock.calls.at(-1)?.[0];
+    expect(visual?.pointSize).toBe(6);
+  });
+
+  it("zooms and resets the scatter viewport", async () => {
+    await act(async () => {
+      render(<Scatter panel={{ id: 1, kind: "scatter", x: "x", y: "y" }} />);
+    });
+
+    setViewportSpy.mockClear();
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("zoom in"));
+    });
+
+    const zoomed = setViewportSpy.mock.calls.at(-1)?.[0];
+    if (!zoomed) throw new Error("zoom did not set a viewport");
+    expect(zoomed.xMax - zoomed.xMin).toBeCloseTo(2.4, 6);
+    expect(zoomed.yMax - zoomed.yMin).toBeCloseTo(2.4, 6);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("reset view"));
+    });
+    expect(setViewportSpy.mock.calls.at(-1)?.[0]).toBeNull();
+  });
+
+  it("persists scatter viewport changes when the panel is in the store", async () => {
+    const id = useAppStore.getState().addScatter("x", "y");
+    const panel = useAppStore.getState().plots.panels.find((p) => p.id === id);
+    if (!panel || panel.kind !== "scatter") throw new Error("scatter panel not created");
+
+    await act(async () => {
+      render(<Scatter panel={panel} />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("zoom in"));
+    });
+
+    const stored = useAppStore.getState().plots.panels.find((p) => p.id === id);
+    if (!stored || stored.kind !== "scatter") throw new Error("scatter panel missing");
+    expect(stored.viewport).toBeDefined();
+  });
+
+  it("pans the scatter viewport with shift-drag", async () => {
+    await act(async () => {
+      render(<Scatter panel={{ id: 1, kind: "scatter", x: "x", y: "y" }} />);
+    });
+    const canvas = document.querySelector("canvas")!;
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, width: 500, height: 500, right: 500, bottom: 500 }),
+    });
+
+    setViewportSpy.mockClear();
+    await act(async () => {
+      fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100, shiftKey: true });
+      fireEvent.mouseMove(canvas, { clientX: 144, clientY: 144 });
+    });
+
+    const panned = setViewportSpy.mock.calls.at(-1)?.[0];
+    if (!panned) throw new Error("pan did not set a viewport");
+    expect(panned.xMin).toBeLessThan(dataBounds.xMin);
+    expect(panned.yMin).toBeGreaterThan(dataBounds.yMin);
   });
 
   it("emits removePanel when the close button is clicked", async () => {

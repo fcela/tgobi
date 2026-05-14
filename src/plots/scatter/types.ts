@@ -3,16 +3,25 @@ import type { Edges } from "@/lib/edges/types";
 export interface ScatterRenderState {
   color: ReadonlyArray<string>; // length n; CSS hex (per-row colour)
   alpha: number; // 0..1 point opacity
+  pointSize: number; // point radius in CSS px
   selected: Uint8Array; // packed bit per row
   paint: Uint8Array; // byte per row, 0 = unpainted
   shape: Uint8Array; // byte per row, 0/1 circle, 2 square, 3 triangle, 4 diamond
   shadow: Uint8Array; // packed bit per row
   paintPalette: ReadonlyArray<string>; // index 1..N → CSS hex
+  showMarginals: boolean; // draw marginal/rug glyphs for rows missing one axis
 }
 
 export interface ScatterTransform {
   toPx: (dx: number, dy: number) => { x: number; y: number };
   toData: (px: number, py: number) => { x: number; y: number };
+}
+
+export interface ScatterViewport {
+  xMin: number;
+  xMax: number;
+  yMin: number;
+  yMax: number;
 }
 
 export interface BrushOverlay {
@@ -48,6 +57,9 @@ export interface ScatterRenderer {
     yMissing: Uint8Array,
   ): void;
   setSize(width: number, height: number): void;
+  setViewport(viewport: ScatterViewport | null): void;
+  getDataBounds(): ScatterViewport;
+  getViewBounds(): ScatterViewport;
   draw(
     visual: ScatterRenderState,
     activeBrush: BrushOverlay | null,

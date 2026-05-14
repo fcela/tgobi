@@ -52,7 +52,13 @@ export type DeriveSpec =
   | { kind: "sqrt"; source: string }
   | { kind: "standardize"; source: string }
   | { kind: "rank"; source: string }
-  | { kind: "negate"; source: string };
+  | { kind: "negate"; source: string }
+  | { kind: "power"; source: string; exponent: number }
+  | { kind: "jitter"; source: string; amplitude: number; seed: number }
+  | { kind: "missingIndicator"; source: string }
+  | { kind: "imputeFixed"; source: string; value: number }
+  | { kind: "imputeRandom"; source: string; seed: number }
+  | { kind: "imputeConditional"; source: string; condVar: string; seed: number };
 
 export interface DataFrame {
   readonly nrow: number;

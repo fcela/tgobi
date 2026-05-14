@@ -6,6 +6,9 @@ import { Barchart } from "@/plots/barchart/Barchart";
 import { Dotplot } from "@/plots/dotplot/Dotplot";
 import { Scatmat } from "@/plots/scatmat/Scatmat";
 import { Parcoords } from "@/plots/parcoords/Parcoords";
+import { MissingPattern } from "@/plots/missing/MissingPattern";
+import { Timeseries } from "@/plots/timeseries/Timeseries";
+import { Scatter3D } from "@/plots/scatter3d/Scatter3D";
 
 interface TileLeafProps {
   node: TileLeafType;
@@ -105,7 +108,10 @@ function panelLabel(panel: PlotPanel): string {
   if (panel.kind === "barchart") return panel.variable;
   if (panel.kind === "dotplot") return panel.variable;
   if (panel.kind === "scatmat") return `scatmat(${panel.variables.length})`;
-  return `parcoords(${panel.variables.length})`;
+  if (panel.kind === "parcoords") return `parcoords(${panel.variables.length})`;
+  if (panel.kind === "timeseries") return `${panel.x} → ${panel.y.join(",")}`;
+  if (panel.kind === "scatter3d") return `${panel.x} × ${panel.y} × ${panel.z}`;
+  return "missing pattern";
 }
 
 function dropPositionForEvent(e: React.DragEvent<HTMLDivElement>): "center" | "left" | "right" | "top" | "bottom" {
@@ -134,5 +140,11 @@ function renderPanel(panel: PlotPanel) {
       return <Scatmat panel={panel} />;
     case "parcoords":
       return <Parcoords panel={panel} />;
+    case "missingPattern":
+      return <MissingPattern panel={panel} />;
+    case "timeseries":
+      return <Timeseries panel={panel} />;
+    case "scatter3d":
+      return <Scatter3D panel={panel} />;
   }
 }

@@ -16,11 +16,13 @@ beforeEach(() => {
 const visual = (n: number): ScatterRenderState => ({
   color: Array(n).fill("#cccccc"),
   alpha: 0.65,
+  pointSize: 2.5,
   selected: new Uint8Array(Math.ceil(n / 8)),
   paint: new Uint8Array(n),
   shape: new Uint8Array(n),
   shadow: new Uint8Array(Math.ceil(n / 8)),
   paintPalette: ["#000000", "#ff0000", "#00ff00"],
+  showMarginals: false,
 });
 
 describe("Canvas2DScatterRenderer", () => {
@@ -44,6 +46,23 @@ describe("Canvas2DScatterRenderer", () => {
     const back = t.toData(px.x, px.y);
     expect(back.x).toBeCloseTo(5, 6);
     expect(back.y).toBeCloseTo(50, 6);
+  });
+
+  it("uses an explicit viewport for transforms and can reset to data bounds", () => {
+    r.setData(new Float64Array([0, 10]), new Float64Array([0, 100]),
+              new Uint8Array(1), new Uint8Array(1));
+    r.setViewport({ xMin: 0, xMax: 5, yMin: 0, yMax: 50 });
+
+    const zoomed = r.transform();
+    const p = zoomed.toPx(5, 50);
+    expect(p.x).toBeCloseTo(172, 6);
+    expect(p.y).toBeCloseTo(28, 6);
+    const back = zoomed.toData(p.x, p.y);
+    expect(back.x).toBeCloseTo(5, 6);
+    expect(back.y).toBeCloseTo(50, 6);
+
+    r.setViewport(null);
+    expect(r.getViewBounds()).toEqual(r.getDataBounds());
   });
 
   it("draw() does not throw with empty selection / no active rect", () => {

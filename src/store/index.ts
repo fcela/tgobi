@@ -10,6 +10,10 @@ import { createEdgesSlice } from "@/store/slices/edges";
 import { createHullsSlice } from "@/store/slices/hulls";
 import { createPlotsSlice } from "@/store/slices/plots";
 import { createTourSlice } from "@/store/slices/tour";
+import { createMissingSlice } from "@/store/slices/missing";
+import { createClusteringSlice } from "@/store/slices/clustering";
+import { createClassificationSlice } from "@/store/slices/classification";
+import { createProjectionSlice } from "@/store/slices/projection";
 
 export const useAppStore = create<AppStore>()((...a) => ({
   ...createDataSlice(...a),
@@ -22,4 +26,8 @@ export const useAppStore = create<AppStore>()((...a) => ({
   ...createHullsSlice(...a),
   ...createPlotsSlice(...a),
   ...createTourSlice(...a),
+  ...createMissingSlice(...a),
+  ...createClusteringSlice(...a),
+  ...createClassificationSlice(...a),
+  ...createProjectionSlice(...a),
 }));

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ParcoordsPanel } from "@/store/types";
 import { useAppStore } from "@/store";
 import { bitGet } from "@/lib/brush/hitTest";
+import { formatRowLabel } from "@/lib/data/format";
+import { resolveScaledValues } from "@/lib/data/resolveScaling";
 import { categoricalScale, sequentialScale, divergingScale } from "@/lib/color/scales";
 import { getPalette } from "@/lib/color/palettes";
 import { ReglParcoordsRenderer } from "@/plots/parcoords/reglParcoordsRenderer";
@@ -25,14 +27,19 @@ export interface ParcoordsProps {
 
 export function Parcoords({ panel }: ParcoordsProps) {
   const df = useAppStore((s) => s.df);
+  const spec = useAppStore((s) => s.spec);
   const selection = useAppStore((s) => s.selection);
   const colorState = useAppStore((s) => s.color);
   const brush = useAppStore((s) => s.brush);
   const activeTool = useAppStore((s) => s.tools.active);
+  const pinnedRows = useAppStore((s) => s.tools.pinnedRows);
+  const labelVar = useAppStore((s) => s.tools.labelVar);
   const setActiveBrush = useAppStore((s) => s.setActiveBrush);
   const setSelectionMask = useAppStore((s) => s.setSelectionMask);
   const setSelectionPaint = useAppStore((s) => s.setSelectionPaint);
   const setSelectionShape = useAppStore((s) => s.setSelectionShape);
+  const setIdentifyHover = useAppStore((s) => s.setIdentifyHover);
+  const togglePinnedIdentify = useAppStore((s) => s.togglePinnedIdentify);
   const removePanel = useAppStore((s) => s.removePanel);
 
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -45,16 +52,19 @@ export function Parcoords({ panel }: ParcoordsProps) {
 
   const [tip, setTip] = useState<{ text: string; px: number; py: number } | null>(null);
   const [alpha, setAlpha] = useState<number | null>(null);
+  const [labels, setLabels] = useState<PinnedLabel[]>([]);
 
-  // Resolved columns for each variable in panel.variables
+  // Resolved columns for each variable in panel.variables, with scaling applied
   const cols = useMemo(() => {
     if (!df) return [];
     return panel.variables.map((v) => {
       const c = df.column(v);
       if (!c || (c.type !== "numeric" && c.type !== "integer")) return null;
-      return c as Extract<typeof c, { type: "numeric" | "integer" }>;
+      const vs = spec.find((s) => s.name === v);
+      const resolved = resolveScaledValues(c, vs);
+      return { type: c.type as "numeric" | "integer", name: c.name, length: c.length, values: resolved.values, missing: { buffer: resolved.missingBuffer, isMissing: c.missing.isMissing.bind(c.missing) } };
     });
-  }, [df, panel.variables]);
+  }, [df, panel.variables, spec]);
 
   // Per-row colors
   const colors: ReadonlyArray<string> = useMemo(() => {
@@ -90,10 +100,12 @@ export function Parcoords({ panel }: ParcoordsProps) {
 
   const requestPaint = () => {
     if (paintHandle.current != null) return;
-    paintHandle.current = requestAnimationFrame(() => {
+    paintHandle.current = -1;
+    const handle = requestAnimationFrame(() => {
       paintHandle.current = null;
       paint();
     });
+    if (paintHandle.current === -1) paintHandle.current = handle;
   };
 
   // Precomputed y-pixel arrays for identify — rebuilt each render
@@ -139,6 +151,7 @@ export function Parcoords({ panel }: ParcoordsProps) {
       return arr;
     });
     yPxRef.current = yPx;
+    updatePinnedLabels(layout, yPx);
 
     const activeBrushAxis =
       brush.activePanelId === panel.id ? activeDragAxis.current : null;
@@ -225,7 +238,7 @@ export function Parcoords({ panel }: ParcoordsProps) {
   useEffect(() => {
     requestPaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, cols, colors, selection, brush.activeRect, brush.activePanelId, paintPalette, alpha]);
+  }, [df, cols, colors, selection, brush.activeRect, brush.activePanelId, paintPalette, alpha, pinnedRows, labelVar]);
 
   // Brush drag state
   const activeDragAxis = useRef<number | null>(null);
@@ -262,7 +275,34 @@ export function Parcoords({ panel }: ParcoordsProps) {
     return hitAxis(layout.axes, px);
   };
 
+  const identifyRowAt = (px: number, py: number): number => {
+    if (!df) return -1;
+    const { w, h } = sizeRef.current;
+    const nAxes = panel.variables.length;
+    const nRows = df.nrow;
+    const ranges = cols.map((col) => {
+      if (!col) return { min: 0, max: 1 };
+      return dataRange(col.values, col.missing.buffer);
+    });
+    const layout = computeLayout(w, h, nAxes, ranges);
+    const yPx = yPxRef.current;
+    if (yPx.length !== nAxes || nRows <= 0) return -1;
+    return identifyRow(px, py, layout.axes, yPx, nRows, nAxes);
+  };
+
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (activeTool === "identify") {
+      const canvas = e.currentTarget as HTMLCanvasElement;
+      const canvasRect = canvas.getBoundingClientRect();
+      const px = e.clientX - canvasRect.left;
+      const py = e.clientY - canvasRect.top;
+      const rowIdx = identifyRowAt(px, py);
+      if (rowIdx >= 0) {
+        setIdentifyHover(rowIdx);
+        togglePinnedIdentify(rowIdx);
+      }
+      return;
+    }
     if (activeTool !== "brush") return;
     if (!df) return;
     const axisIdx = getAxisFromEvent(e);
@@ -298,27 +338,18 @@ export function Parcoords({ panel }: ParcoordsProps) {
     const py = e.clientY - canvasRect.top;
 
     if (activeTool === "identify" && df) {
-      const { w, h } = sizeRef.current;
-      const nAxes = panel.variables.length;
-      const nRows = df.nrow;
-      const ranges = cols.map((col) => {
-        if (!col) return { min: 0, max: 1 };
-        return dataRange(col.values, col.missing.buffer);
-      });
-      const layout = computeLayout(w, h, nAxes, ranges);
-      const yPx = yPxRef.current;
-      if (yPx.length === nAxes && nRows > 0) {
-        const rowIdx = identifyRow(px, py, layout.axes, yPx, nRows, nAxes);
-        if (rowIdx >= 0) {
-          const parts = panel.variables.map((v, k) => {
-            const col = cols[k];
-            const val = col && !bitGet(col.missing.buffer, rowIdx) ? col.values[rowIdx] : "?";
-            return `${v}=${val}`;
-          });
-          setTip({ text: `row ${rowIdx + 1}: ${parts.join(", ")}`, px: px + 8, py: py + 8 });
-          return;
-        }
+      const rowIdx = identifyRowAt(px, py);
+      if (rowIdx >= 0) {
+        setIdentifyHover(rowIdx);
+        const parts = panel.variables.map((v, k) => {
+          const col = cols[k];
+          const val = col && !bitGet(col.missing.buffer, rowIdx) ? col.values[rowIdx] : "?";
+          return `${v}=${val}`;
+        });
+        setTip({ text: `row ${rowIdx + 1}: ${parts.join(", ")}`, px: px + 8, py: py + 8 });
+        return;
       }
+      setIdentifyHover(null);
       setTip(null);
       return;
     }
@@ -388,6 +419,7 @@ export function Parcoords({ panel }: ParcoordsProps) {
 
   const onMouseLeave = () => {
     setTip(null);
+    setIdentifyHover(null);
   };
 
   // Header label
@@ -431,6 +463,16 @@ export function Parcoords({ panel }: ParcoordsProps) {
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseLeave}
         />
+        {labels.map((label) => (
+          <div
+            key={label.row}
+            className="plot-label"
+            data-testid={`pinned-parcoords-label-${label.row}`}
+            style={{ left: label.x, top: label.y }}
+          >
+            {label.label}
+          </div>
+        ))}
       </div>
       {tip && (
         <div className="plot-tooltip" style={{ left: tip.px, top: tip.py }}>
@@ -439,6 +481,35 @@ export function Parcoords({ panel }: ParcoordsProps) {
       )}
     </div>
   );
+
+  function updatePinnedLabels(
+    layout: ReturnType<typeof computeLayout>,
+    yPx: ReadonlyArray<Float64Array>,
+  ) {
+    if (!df) return;
+    const lastAxis = layout.axes[layout.axes.length - 1];
+    if (!lastAxis) {
+      setLabels((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+
+    const { w, h } = sizeRef.current;
+    const left = Math.max(2, Math.min(lastAxis.x + 8, Math.max(2, w - 148)));
+    const axisY = yPx[layout.axes.length - 1];
+    const next: PinnedLabel[] = [];
+    for (let row = 0; row < df.nrow; row++) {
+      if (!bitGet(pinnedRows, row)) continue;
+      const y = axisY?.[row];
+      if (y == null || Number.isNaN(y)) continue;
+      next.push({
+        row,
+        x: left,
+        y: Math.max(8, Math.min(y, h - 8)),
+        label: formatRowLabel(df, row, labelVar),
+      });
+    }
+    setLabels((prev) => samePinnedLabels(prev, next) ? prev : next);
+  }
 }
 
 function defaultParcoordsAlpha(nRows: number): number {
@@ -446,4 +517,21 @@ function defaultParcoordsAlpha(nRows: number): number {
     return Math.max(0.08, PARCOORDS_DEFAULT_LINE_ALPHA * Math.sqrt(50000 / nRows));
   }
   return PARCOORDS_DEFAULT_LINE_ALPHA;
+}
+
+interface PinnedLabel {
+  row: number;
+  x: number;
+  y: number;
+  label: string;
+}
+
+function samePinnedLabels(a: ReadonlyArray<PinnedLabel>, b: ReadonlyArray<PinnedLabel>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.row !== y.row || x.x !== y.x || x.y !== y.y || x.label !== y.label) return false;
+  }
+  return true;
 }

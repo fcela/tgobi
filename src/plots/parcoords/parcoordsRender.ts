@@ -168,7 +168,11 @@ export function drawParcoords(
   ctx.lineWidth = LINE_WIDTH;
   for (let i = 0; i < nRows; i++) {
     if (!bitGet(visual.shadow, i)) continue;
-    drawPolyline(ctx, i, axes, yPx, visual.color[i] ?? "#888", nAxes);
+    const paintIdx = visual.paint[i]!;
+    const color = paintIdx > 0
+      ? (visual.paintPalette[paintIdx - 1] ?? visual.color[i] ?? "#888")
+      : (visual.color[i] ?? "#888");
+    drawPolyline(ctx, i, axes, yPx, color, nAxes);
   }
   ctx.globalAlpha = 1;
 

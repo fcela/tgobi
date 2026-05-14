@@ -10,15 +10,21 @@ export function AddPlotMenu() {
   const addDotplot = useAppStore((s) => s.addDotplot);
   const addScatmat = useAppStore((s) => s.addScatmat);
   const addParcoords = useAppStore((s) => s.addParcoords);
+  const addMissingPattern = useAppStore((s) => s.addMissingPattern);
+  const addTimeseries = useAppStore((s) => s.addTimeseries);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [kind, setKind] = useState<"scatter" | "barchart" | "dotplot" | "scatmat" | "parcoords">("scatter");
+  const [kind, setKind] = useState<"scatter" | "barchart" | "dotplot" | "scatmat" | "parcoords" | "missingPattern" | "timeseries">("scatter");
 
   const numericVars = useMemo(() => {
     if (!df) return [];
     return df.columns.filter((c) => c.type === "numeric" || c.type === "integer").map((c) => c.name);
   }, [df]);
   const barVars = useMemo(() => df?.columns.map((c) => c.name) ?? [], [df]);
+  const catVars = useMemo(() => {
+    if (!df) return [];
+    return df.columns.filter((c) => c.type === "categorical").map((c) => c.name);
+  }, [df]);
 
   const [x, setX] = useState<string>("");
   const [y, setY] = useState<string>("");
@@ -26,6 +32,10 @@ export function AddPlotMenu() {
   const [dotVar, setDotVar] = useState<string>("");
   const [scatmatVars, setScatmatVars] = useState<Set<string>>(new Set());
   const [parcoordsVars, setParcoordsVars] = useState<Set<string>>(new Set());
+  const [tsX, setTsX] = useState<string>("");
+  const [tsY, setTsY] = useState<Set<string>>(new Set());
+  const [tsGroup, setTsGroup] = useState<string>("");
+  const [tsDisplay, setTsDisplay] = useState<"points" | "lines" | "points+lines">("points+lines");
 
   useEffect(() => {
     if (numericVars.length >= 2) { setX(numericVars[0]!); setY(numericVars[1]!); }
@@ -41,12 +51,14 @@ export function AddPlotMenu() {
     if (numericVars.length < 2 && barVars.length > 0) setKind("barchart");
   }, [numericVars.length, barVars.length]);
   useEffect(() => {
-    // Default: select first up-to-6 numeric vars for scatmat and parcoords
     const defaults = numericVars.slice(0, MAX_SCATMAT_DEFAULT);
     setScatmatVars(new Set(defaults));
     setParcoordsVars(new Set(defaults));
   }, [numericVars]);
-
+  useEffect(() => {
+    if (numericVars.length >= 1) setTsX(numericVars[0]!);
+    if (numericVars.length >= 2) setTsY(new Set([numericVars[1]!]));
+  }, [numericVars]);
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
@@ -76,19 +88,26 @@ export function AddPlotMenu() {
       const selected = numericVars.filter((v) => parcoordsVars.has(v));
       if (selected.length < 2) return;
       addParcoords(selected);
-    } else {
+  } else if (kind === "missingPattern") {
+    addMissingPattern();
+  } else if (kind === "timeseries") {
+    const yList = numericVars.filter((v) => tsY.has(v));
+    if (!tsX || yList.length === 0) return;
+    addTimeseries(tsX, yList, tsGroup || null, tsDisplay);
+  } else {
       if (!dotVar) return;
       addDotplot(dotVar);
     }
     setOpen(false);
   };
 
-  const disabled = !df || (
+  const disabled = !df || (kind === "missingPattern" ? false :
     kind === "scatter" ? numericVars.length < 2 :
     kind === "dotplot" ? numericVars.length < 1 :
     kind === "scatmat" ? numericVars.filter((v) => scatmatVars.has(v)).length < 2 :
     kind === "parcoords" ? numericVars.filter((v) => parcoordsVars.has(v)).length < 2 :
-    barVars.length < 1
+  kind === "timeseries" ? !tsX || numericVars.filter((v) => tsY.has(v)).length < 1 :
+  barVars.length < 1
   );
 
   return (
@@ -108,13 +127,15 @@ export function AddPlotMenu() {
             id="plot-kind"
             aria-label="Plot type"
             value={kind}
-            onChange={(e) => setKind(e.target.value as "scatter" | "barchart" | "dotplot" | "scatmat" | "parcoords")}
-          >
-            <option value="scatter">scatter</option>
-            <option value="barchart">barchart</option>
-            <option value="dotplot">dotplot</option>
-            <option value="scatmat">scatmat</option>
-            <option value="parcoords">parcoords</option>
+          onChange={(e) => setKind(e.target.value as "scatter" | "barchart" | "dotplot" | "scatmat" | "parcoords" | "missingPattern" | "timeseries")}
+        >
+          <option value="scatter">scatter</option>
+          <option value="barchart">barchart</option>
+          <option value="dotplot">dotplot</option>
+          <option value="scatmat">scatmat</option>
+          <option value="parcoords">parcoords</option>
+          <option value="missingPattern">missing pattern</option>
+          <option value="timeseries">timeseries</option>
           </select>
           {kind === "scatter" ? (
             <>
@@ -185,11 +206,56 @@ export function AddPlotMenu() {
                     {v}
                   </label>
                 ))}
-              </div>
-            </>
-          ) : (
-            <>
-              <label htmlFor="dot-var">Variable</label>
+      </div>
+      </>
+) : kind === "missingPattern" ? (
+  <label style={{ gridColumn: "span 2" }}>Shows missingness patterns across all variables</label>
+) : kind === "timeseries" ? (
+  <>
+    <label htmlFor="ts-x">X (time)</label>
+    <select id="ts-x" aria-label="Timeseries X variable" value={tsX} onChange={(e) => setTsX(e.target.value)}>
+      {numericVars.map((n) => <option key={n} value={n}>{n}</option>)}
+    </select>
+    <label style={{ gridColumn: "span 2", marginBottom: 2 }}>Y variables</label>
+    <div
+      aria-label="Timeseries Y variables"
+      style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: 4, maxHeight: 120, overflowY: "auto" }}
+    >
+      {numericVars.map((v) => (
+        <label key={v} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            aria-label={`timeseries y variable ${v}`}
+            checked={tsY.has(v)}
+            onChange={(e) => {
+              const next = new Set(tsY);
+              if (e.target.checked) next.add(v); else next.delete(v);
+              setTsY(next);
+            }}
+          />
+          {v}
+        </label>
+      ))}
+    </div>
+    {catVars.length > 0 && (
+      <>
+        <label htmlFor="ts-group">Group</label>
+        <select id="ts-group" aria-label="Timeseries group variable" value={tsGroup} onChange={(e) => setTsGroup(e.target.value)}>
+          <option value="">(none)</option>
+          {catVars.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </>
+    )}
+    <label htmlFor="ts-display">Display</label>
+    <select id="ts-display" aria-label="Timeseries display mode" value={tsDisplay} onChange={(e) => setTsDisplay(e.target.value as "points" | "lines" | "points+lines")}>
+      <option value="points+lines">points + lines</option>
+      <option value="lines">lines only</option>
+      <option value="points">points only</option>
+        </select>
+  </>
+) : (
+        <>
+          <label htmlFor="dot-var">Variable</label>
               <select
                 id="dot-var"
                 aria-label="Dot variable"

@@ -73,7 +73,7 @@ class DerivedDataFrame extends BaseDataFrame {
 
   #materialize(): Column {
     if (!this.#cached) {
-      this.#cached = applyTransform(this.#spec, this.#source, this.#name);
+      this.#cached = applyTransform(this.#spec, this.#source, this.#name, this.#base);
     }
     return this.#cached;
   }

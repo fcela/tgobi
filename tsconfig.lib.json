@@ -8,5 +8,5 @@
     "outDir": "dist-lib/types",
     "tsBuildInfoFile": "dist-lib/tsconfig.lib.tsbuildinfo"
   },
-  "include": ["src/index.tsx", "src/workers/worker-types.d.ts"]
+  "include": ["src/index.tsx", "src/workers/worker-types.d.ts", "src/types/density-clustering.d.ts", "src/types/ml-classification.d.ts"]
 }

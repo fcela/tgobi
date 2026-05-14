@@ -7,6 +7,7 @@ import type {
   ScatterRenderer,
   ScatterRenderState,
   ScatterTransform,
+  ScatterViewport,
 } from "@/plots/scatter/types";
 import { bitGet } from "@/lib/brush/hitTest";
 import { drawHullOverlay } from "@/plots/scatter/overlay2d";
@@ -82,6 +83,7 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   
   #w = 0; #h = 0;
   #xMin = 0; #xMax = 1; #yMin = 0; #yMax = 1;
+  #viewport: ScatterViewport | null = null;
   #count = 0;
   #x: Float64Array | Int32Array | null = null;
   #y: Float64Array | Int32Array | null = null;
@@ -137,6 +139,7 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   uniform float u_dpr;
   uniform float u_pass; // 0=shadow, 1=normal, 2=halo
   uniform float u_alpha;
+  uniform float u_pointSize;
 
   varying vec4 v_color;
   varying float v_shape;
@@ -178,7 +181,7 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   clip.y *= -1.0;
   gl_Position = vec4(clip, 0.0, 1.0);
 
-  gl_PointSize = u_dpr * ((u_pass == 2.0) ? ${(HALO_R * 2.5).toFixed(1)} : ${(POINT_R * 2.0).toFixed(1)});
+  gl_PointSize = u_dpr * ((u_pass == 2.0) ? max(${(HALO_R * 2.5).toFixed(1)}, (u_pointSize + 2.0) * 2.5) : max(1.0, u_pointSize * 2.0));
   }
   `,
   frag: `
@@ -228,7 +231,8 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   u_margin: MARGIN,
   u_dpr: this.#regl.prop<any, 'u_dpr'>('u_dpr'),
   u_pass: this.#regl.prop<any, 'u_pass'>('u_pass'),
-  u_alpha: this.#regl.prop<any, 'u_alpha'>('u_alpha')
+  u_alpha: this.#regl.prop<any, 'u_alpha'>('u_alpha'),
+  u_pointSize: this.#regl.prop<any, 'u_pointSize'>('u_pointSize')
   },
       primitive: 'points',
       count: this.#regl.prop<any, 'count'>('count'),
@@ -383,12 +387,25 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   this.#posBuffer({ data: pos, usage: "dynamic" });
   this.#colorBuffer({ length: n * 4, type: "uint8", usage: "dynamic" });
   this.#flagsBuffer({ length: n, type: "uint8", usage: "dynamic" });
-  this.#cachedColorData = null;
+    this.#cachedColorData = null;
+  }
+
+  setViewport(viewport: ScatterViewport | null): void {
+    this.#viewport = viewport ? normalizeViewport(viewport) : null;
+  }
+
+  getDataBounds(): ScatterViewport {
+    return { xMin: this.#xMin, xMax: this.#xMax, yMin: this.#yMin, yMax: this.#yMax };
+  }
+
+  getViewBounds(): ScatterViewport {
+    return this.#viewport ?? this.getDataBounds();
   }
 
   transform(): ScatterTransform {
     const w = this.#w, h = this.#h;
-    const xMin = this.#xMin, xMax = this.#xMax, yMin = this.#yMin, yMax = this.#yMax;
+    const view = this.getViewBounds();
+    const xMin = view.xMin, xMax = view.xMax, yMin = view.yMin, yMax = view.yMax;
     const innerW = Math.max(1, w - 2 * MARGIN);
     const innerH = Math.max(1, h - 2 * MARGIN);
     return {
@@ -447,16 +464,16 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   f += shape << 3;
   flagsData[i] = f;
 
-  if (!isShadow && paintIdx > 0) {
-  const pColor = visual.paintPalette[paintIdx - 1];
-  if (pColor) {
-  const rgba = hexToRgba(pColor, DEFAULT_ALPHA);
-  colorData[i * 4] = rgba[0];
-  colorData[i * 4 + 1] = rgba[1];
-  colorData[i * 4 + 2] = rgba[2];
-  colorData[i * 4 + 3] = rgba[3];
-  }
-  }
+    if (paintIdx > 0) {
+      const pColor = visual.paintPalette[paintIdx - 1];
+      if (pColor) {
+        const rgba = hexToRgba(pColor, DEFAULT_ALPHA);
+        colorData[i * 4] = rgba[0];
+        colorData[i * 4 + 1] = rgba[1];
+        colorData[i * 4 + 2] = rgba[2];
+        colorData[i * 4 + 3] = rgba[3];
+      }
+    }
   }
 
     this.#colorBuffer.subdata(colorData);
@@ -466,10 +483,11 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
 
     const physW = this.#w * this.#dpr;
     const physH = this.#h * this.#dpr;
+  const view = this.getViewBounds();
   const baseProps = {
   count: n,
-  u_rangeMin: [this.#xMin, this.#yMin],
-  u_rangeMax: [this.#xMax, this.#yMax],
+  u_rangeMin: [view.xMin, view.yMin],
+  u_rangeMax: [view.xMax, view.yMax],
   u_resolution: [physW, physH],
   u_dpr: this.#dpr,
   viewport: { x: 0, y: 0, width: physW, height: physH },
@@ -481,6 +499,7 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   ...baseProps,
   u_pass: 0,
   u_alpha: visual.alpha,
+  u_pointSize: visual.pointSize,
   };
 
   // Draw passes
@@ -488,15 +507,40 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
     props.u_pass = 1; this.#drawPoints(props); // normal points
     props.u_pass = 2; this.#drawPoints(props); // selected halos
 
-    // Frame
-    if (this.#overlayCtx) {
-      this.#overlayCtx.clearRect(0, 0, this.#w, this.#h);
-      drawHullOverlay(this.#overlayCtx, hullOverlay);
-      this.#overlayCtx.strokeStyle = "#2a2a2a";
-      this.#overlayCtx.lineWidth = 1;
-      this.#overlayCtx.strokeRect(MARGIN + 0.5, MARGIN + 0.5, this.#w - 2 * MARGIN, this.#h - 2 * MARGIN);
-      drawBrushOverlay(this.#overlayCtx, activeBrush);
+  // Frame
+  if (this.#overlayCtx) {
+    this.#overlayCtx.clearRect(0, 0, this.#w, this.#h);
+    drawHullOverlay(this.#overlayCtx, hullOverlay);
+    this.#overlayCtx.strokeStyle = "#2a2a2a";
+    this.#overlayCtx.lineWidth = 1;
+    this.#overlayCtx.strokeRect(MARGIN + 0.5, MARGIN + 0.5, this.#w - 2 * MARGIN, this.#h - 2 * MARGIN);
+    drawBrushOverlay(this.#overlayCtx, activeBrush);
+
+    // Marginal/rug glyphs
+    if (visual.showMarginals && this.#x && this.#y && this.#xMissing && this.#yMissing) {
+      const view = this.getViewBounds();
+      const innerW = Math.max(1, this.#w - 2 * MARGIN);
+      const innerH = Math.max(1, this.#h - 2 * MARGIN);
+      const rugLen = 6;
+      this.#overlayCtx.globalAlpha = visual.alpha * 0.6;
+      for (let i = 0; i < this.#count; i++) {
+        const xMiss = bitGet(this.#xMissing, i);
+        const yMiss = bitGet(this.#yMissing, i);
+        if (xMiss && yMiss) continue;
+        if (!xMiss && !yMiss) continue;
+        const fill = visual.color[i] ?? "#cccccc";
+        this.#overlayCtx.fillStyle = fill;
+        if (xMiss && !yMiss) {
+          const py = MARGIN + (1 - (this.#y[i]! - view.yMin) / (view.yMax - view.yMin)) * innerH;
+          this.#overlayCtx.fillRect(MARGIN - rugLen, py - 1, rugLen, 2);
+        } else if (!xMiss && yMiss) {
+          const px = MARGIN + ((this.#x[i]! - view.xMin) / (view.xMax - view.xMin)) * innerW;
+          this.#overlayCtx.fillRect(px - 1, MARGIN + innerH + 1, 2, rugLen);
+        }
+      }
+      this.#overlayCtx.globalAlpha = 1;
     }
+  }
   }
 
   #drawEdgeOverlay(
@@ -571,4 +615,17 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
     });
   }
   }
+}
+
+function normalizeViewport(viewport: ScatterViewport): ScatterViewport {
+  const xMin = Math.min(viewport.xMin, viewport.xMax);
+  const xMax = Math.max(viewport.xMin, viewport.xMax);
+  const yMin = Math.min(viewport.yMin, viewport.yMax);
+  const yMax = Math.max(viewport.yMin, viewport.yMax);
+  return {
+    xMin,
+    xMax: xMax === xMin ? xMin + 1 : xMax,
+    yMin,
+    yMax: yMax === yMin ? yMin + 1 : yMax,
+  };
 }

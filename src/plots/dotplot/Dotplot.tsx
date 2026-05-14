@@ -5,6 +5,7 @@ import { useAppStore } from "@/store";
 import { bitGet, bitSet, pointInPolygon, type Point2D } from "@/lib/brush/hitTest";
 import { getPalette } from "@/lib/color/palettes";
 import { formatRowLabel } from "@/lib/data/format";
+import { resolveScaledValues } from "@/lib/data/resolveScaling";
 
 const WIDTH = 640;
 const HEIGHT = 320;
@@ -37,6 +38,7 @@ interface DotItem {
 
 export function Dotplot({ panel }: DotplotProps) {
   const df = useAppStore((s) => s.df);
+  const spec = useAppStore((s) => s.spec);
   const selection = useAppStore((s) => s.selection);
   const pinnedRows = useAppStore((s) => s.tools.pinnedRows);
   const labelVar = useAppStore((s) => s.tools.labelVar);
@@ -81,10 +83,13 @@ export function Dotplot({ panel }: DotplotProps) {
           missing[i >> 3] = (missing[i >> 3]! | (1 << (i & 7)));
         }
       }
-      return buildDotsFromValues(tourProj, missing, n, panel.bins);
-    }
-    return buildDots(df, panel.variable, panel.bins);
-  }, [df, panel.variable, panel.bins, isTourActive, tourProj]);
+    return buildDotsFromValues(tourProj, missing, n, panel.bins);
+  }
+  const col = df?.column(panel.variable);
+  const vs = spec.find((v) => v.name === panel.variable);
+  const resolved = col ? resolveScaledValues(col, vs) : null;
+  return buildDots(df, panel.variable, panel.bins, resolved);
+}, [df, panel.variable, panel.bins, isTourActive, tourProj, spec]);
 
   const bucketStep = buckets.length > 0 ? PLOT_W / buckets.length : PLOT_W;
   const pinnedLabels = useMemo(() => {
@@ -554,6 +559,7 @@ function buildDots(
   df: DataFrame | null,
   variable: string,
   bins: number,
+  resolved?: { values: Float64Array | Int32Array; missingBuffer: Uint8Array } | null,
 ): { buckets: DotBucket[]; dots: DotItem[]; isNumeric: boolean } {
   const empty = { buckets: [], dots: [], isNumeric: true };
   if (!df) return empty;
@@ -564,7 +570,7 @@ function buildDots(
     return { buckets: [], dots: [], isNumeric: false };
   }
 
-  const rawBuckets = bucketRows(df, col, bins);
+  const rawBuckets = bucketRows(df, col, bins, resolved);
   if (rawBuckets.length === 0) return empty;
 
   const dots: DotItem[] = [];
@@ -598,14 +604,17 @@ function bucketRows(
   df: DataFrame,
   col: Column,
   bins: number,
+  resolved?: { values: Float64Array | Int32Array; missingBuffer: Uint8Array } | null,
 ): Array<[string, number[], number[]]> {
   // Only numeric/integer — extract values
   const colValues = col as Extract<Column, { type: "numeric" | "integer" }>;
+  const values = resolved?.values ?? colValues.values;
+  const missingBuf = resolved?.missingBuffer ?? col.missing.buffer;
 
   const validRows: Array<{ row: number; value: number }> = [];
   for (let i = 0; i < df.nrow; i++) {
-    if (!col.missing.isMissing(i)) {
-      validRows.push({ row: i, value: colValues.values[i]! });
+    if (!bitGet(missingBuf, i)) {
+      validRows.push({ row: i, value: values[i]! });
     }
   }
   if (validRows.length === 0) return [];

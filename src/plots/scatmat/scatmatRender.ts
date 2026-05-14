@@ -183,7 +183,11 @@ export function drawCell(
     if (!bitGet(visual.shadow, i)) continue;
     const { px, py } = toPx(xValues[i]!, yValues[i]!);
     ctx.globalAlpha = SHADOW_ALPHA;
-    ctx.fillStyle = visual.color[i] ?? "#cccccc";
+    const paintIdx = visual.paint[i]!;
+    const fill = paintIdx > 0
+      ? (visual.paintPalette[paintIdx - 1] ?? visual.color[i] ?? "#cccccc")
+      : (visual.color[i] ?? "#cccccc");
+    ctx.fillStyle = fill;
     drawMarker(ctx, px, py, POINT_R, visual.shape[i] ?? 0);
   }
   ctx.globalAlpha = 1;

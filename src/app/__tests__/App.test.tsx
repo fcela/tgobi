@@ -31,6 +31,21 @@ describe("App integration", () => {
     expect(screen.getByLabelText("add plot")).toBeInTheDocument();
   });
 
+  it("applies schema preview type overrides on load", async () => {
+    render(<App />);
+    const input = screen.getByLabelText("Choose a file") as HTMLInputElement;
+    const file = new File(["x,g\n1,a\n2,b\n"], "tiny.csv", { type: "text/csv" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("type for x"), { target: { value: "categorical" } });
+    fireEvent.click(screen.getByText("Load"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(useAppStore.getState().df?.column("x")?.type).toBe("categorical");
+    expect(useAppStore.getState().spec.find((v) => v.name === "x")?.type).toBe("categorical");
+  });
+
   it("Replace data clears the store and shows the empty state again", async () => {
     render(<App />);
     const input = screen.getByLabelText("Choose a file") as HTMLInputElement;

@@ -20,6 +20,20 @@ describe("PlotsSlice", () => {
     expect(panels[0]).toEqual({ id: id1, kind: "scatter", x: "x", y: "y" });
   });
 
+  it("sets and resets scatter viewport state", () => {
+    const id = useAppStore.getState().addScatter("x", "y");
+    useAppStore.getState().setScatterViewport(id, { xMin: 4, xMax: 1, yMin: 2, yMax: 2 });
+
+    expect(useAppStore.getState().plots.panels[0]).toMatchObject({
+      id,
+      kind: "scatter",
+      viewport: { xMin: 1, xMax: 4, yMin: 2, yMax: 3 },
+    });
+
+    useAppStore.getState().setScatterViewport(id, null);
+    expect(useAppStore.getState().plots.panels[0]).toMatchObject({ viewport: null });
+  });
+
   it("addBarchart appends a barchart panel", () => {
     const id = useAppStore.getState().addBarchart("species");
     expect(useAppStore.getState().plots.panels[0]).toEqual({
@@ -109,6 +123,29 @@ describe("PlotsSlice", () => {
     const nextRoot = useAppStore.getState().plots.root;
     expect(nextRoot?.type).toBe("split");
     expect(collectLeaves(nextRoot).map((leaf) => leaf.tabs)).toEqual([[id2], [id1]]);
+  });
+
+  it("addScatter3D appends a scatter3d panel with default depthCue=alpha", () => {
+    const id = useAppStore.getState().addScatter3D("x", "y", "z");
+    const panel = useAppStore.getState().plots.panels[0];
+    expect(panel).toEqual({ id, kind: "scatter3d", x: "x", y: "y", z: "z", depthCue: "alpha", camera: undefined });
+  });
+
+  it("setScatter3DCamera updates camera and null clears it", () => {
+    const id = useAppStore.getState().addScatter3D("x", "y", "z");
+    const cam = { theta: 1, phi: 0.5, distance: 4, centerX: 0, centerY: 0, centerZ: 0 };
+    useAppStore.getState().setScatter3DCamera(id, cam);
+    expect(useAppStore.getState().plots.panels[0]).toMatchObject({ camera: cam });
+    useAppStore.getState().setScatter3DCamera(id, null);
+    expect(useAppStore.getState().plots.panels[0]).toMatchObject({ camera: null });
+  });
+
+  it("setScatter3DDepthCue updates depth cue mode", () => {
+    const id = useAppStore.getState().addScatter3D("x", "y", "z");
+    useAppStore.getState().setScatter3DDepthCue(id, "size");
+    expect(useAppStore.getState().plots.panels[0]).toMatchObject({ depthCue: "size" });
+    useAppStore.getState().setScatter3DDepthCue(id, "none");
+    expect(useAppStore.getState().plots.panels[0]).toMatchObject({ depthCue: "none" });
   });
 });
 

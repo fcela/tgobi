@@ -298,11 +298,9 @@ function passAlpha(pass: SegmentPass, alpha: number): number {
 
 function rowColor(pass: SegmentPass, row: number, visual: VisualState): string {
   if (pass === "selected") return "#ffd400";
-  if (pass === "normal") {
-    const paintIdx = visual.paint[row] ?? 0;
-    if (paintIdx > 0) {
-      return visual.paintPalette[paintIdx - 1] ?? visual.color[row] ?? "#88c";
-    }
+  const paintIdx = visual.paint[row] ?? 0;
+  if (paintIdx > 0) {
+    return visual.paintPalette[paintIdx - 1] ?? visual.color[row] ?? "#88c";
   }
   return visual.color[row] ?? "#888";
 }

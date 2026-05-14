@@ -34,6 +34,9 @@ vi.mock("@/plots/scatter/canvas2dRenderer", () => {
       detach: vi.fn(),
       setData: vi.fn(),
       setSize: vi.fn(),
+      setViewport: vi.fn(),
+      getDataBounds: vi.fn(() => ({ xMin: 1, xMax: 3, yMin: 1, yMax: 3 })),
+      getViewBounds: vi.fn(() => ({ xMin: 1, xMax: 3, yMin: 1, yMax: 3 })),
       draw: drawSpy,
       transform: transformSpy,
     };

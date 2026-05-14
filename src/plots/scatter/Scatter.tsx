@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas2DScatterRenderer } from "@/plots/scatter/canvas2dRenderer";
 import { Regl2DScatterRenderer } from "@/plots/scatter/regl2dRenderer";
 import type { ScatterPanel } from "@/store/types";
-import type { HullOverlay, ScatterRenderState, ScatterRenderer, ScatterTransform } from "@/plots/scatter/types";
+import type {
+  HullOverlay,
+  ScatterRenderState,
+  ScatterRenderer,
+  ScatterTransform,
+  ScatterViewport,
+} from "@/plots/scatter/types";
 import { useAppStore } from "@/store";
 import { KdTree2D } from "@/lib/brush/kdtree";
 import {
@@ -24,11 +30,14 @@ import {
 import { categoricalScale, sequentialScale, divergingScale } from "@/lib/color/scales";
 import { getPalette } from "@/lib/color/palettes";
 import { formatRowLabel } from "@/lib/data/format";
+import { resolveScaledValues } from "@/lib/data/resolveScaling";
 import { convexHull } from "@/lib/geometry/convexHull";
 
 const FIXED_FALLBACK = "#88c";
 const EDGE_NODE_HIT_RADIUS = 14;
 const EDGE_DELETE_HIT_RADIUS = 8;
+const DEFAULT_POINT_SIZE = 2.5;
+const SCATTER_MARGIN = 28;
 
 export interface ScatterProps {
   panel: ScatterPanel;
@@ -36,6 +45,7 @@ export interface ScatterProps {
 
 export function Scatter({ panel }: ScatterProps) {
   const df = useAppStore((s) => s.df);
+  const spec = useAppStore((s) => s.spec);
   const selection = useAppStore((s) => s.selection);
   const colorState = useAppStore((s) => s.color);
   const brush = useAppStore((s) => s.brush);
@@ -54,6 +64,8 @@ export function Scatter({ panel }: ScatterProps) {
   const addEdge = useAppStore((s) => s.addEdge);
   const deleteEdge = useAppStore((s) => s.deleteEdge);
   const removePanel = useAppStore((s) => s.removePanel);
+  const setScatterViewport = useAppStore((s) => s.setScatterViewport);
+  const showMarginals = useAppStore((s) => s.missing.showMarginals);
   const tour = useAppStore((s) => s.tour);
   const tourProj = useAppStore((s) => s.tour.proj);
   const tourActivePanelId = useAppStore((s) => s.tour.activePanelId);
@@ -75,10 +87,20 @@ export function Scatter({ panel }: ScatterProps) {
   const [tip, setTip] = useState<{ i: number; px: number; py: number } | null>(null);
   const [labels, setLabels] = useState<Array<{ i: number; x: number; y: number; label: string }>>([]);
   const [alpha, setAlpha] = useState<number | null>(null);
+  const [pointSize, setPointSize] = useState(DEFAULT_POINT_SIZE);
+  const [localViewport, setLocalViewport] = useState<ScatterViewport | null>(panel.viewport ?? null);
+  const viewport = Object.prototype.hasOwnProperty.call(panel, "viewport")
+    ? panel.viewport ?? null
+    : localViewport;
 
   // numeric arrays for x and y
   const xCol = df?.column(panel.x);
   const yCol = df?.column(panel.y);
+
+  const xSpec = spec.find((v) => v.name === panel.x);
+  const ySpec = spec.find((v) => v.name === panel.y);
+  const xScaled = useMemo(() => xCol ? resolveScaledValues(xCol, xSpec) : undefined, [xCol, xSpec?.scaling]);
+  const yScaled = useMemo(() => yCol ? resolveScaledValues(yCol, ySpec) : undefined, [yCol, ySpec?.scaling]);
 
   // Per-row color (memoized on inputs).
   const colors: ReadonlyArray<string> = useMemo(() => {
@@ -224,21 +246,34 @@ export function Scatter({ panel }: ScatterProps) {
         if (!Number.isFinite(ys[i]!)) ym[i >> 3] = ym[i >> 3]! | (1 << (i & 7));
       }
       r.setData(xs, ys, xm, ym);
+      r.setViewport(viewport);
       treeRef.current = null;
       requestPaint();
       return;
     }
 
-    if (!xCol || !yCol) return;
-    if (xCol.type !== "numeric" && xCol.type !== "integer") return;
-    if (yCol.type !== "numeric" && yCol.type !== "integer") return;
-    r.setData(xCol.values, yCol.values, xCol.missing.buffer, yCol.missing.buffer);
+  if (!xCol || !yCol) return;
+  if (xCol.type !== "numeric" && xCol.type !== "integer") return;
+  if (yCol.type !== "numeric" && yCol.type !== "integer") return;
+  if (!xScaled || !yScaled) return;
+  r.setData(xScaled.values, yScaled.values, xScaled.missingBuffer, yScaled.missingBuffer);
+    r.setViewport(viewport);
 
     // rebuild kd-tree on next paint
     treeRef.current = null;
     requestPaint();
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [df, panel.x, panel.y, xCol, yCol, xScaled, yScaled, isTourActive, tourProj]);
+
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r) return;
+    r.setViewport(viewport);
+    treeRef.current = null;
+    hullCacheRef.current = null;
+    requestPaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, panel.x, panel.y, xCol, yCol, isTourActive, tourProj]);
+  }, [viewport]);
 
   // Paint orchestration — use a ref to avoid stale closure issues.
   const paintHandle = useRef<number | null>(null);
@@ -261,13 +296,15 @@ export function Scatter({ panel }: ScatterProps) {
   const defaultAlpha = n > 50000 ? Math.max(0.15, 0.65 * Math.sqrt(50000 / n)) : 0.65;
   const effectiveAlpha = alpha ?? defaultAlpha;
   const visual: ScatterRenderState = {
-  color: colors,
-  alpha: effectiveAlpha,
-  selected: selection.mask,
-  paint: selection.paint,
-  shape: selection.shape,
-  shadow: selection.shadow,
-  paintPalette,
+    color: colors,
+    alpha: effectiveAlpha,
+    pointSize,
+    selected: selection.mask,
+    paint: selection.paint,
+    shape: selection.shape,
+    shadow: selection.shadow,
+    paintPalette,
+    showMarginals,
   };
   const isThisPanelBrushing =
     brush.activePanelId === panel.id
@@ -303,6 +340,8 @@ export function Scatter({ panel }: ScatterProps) {
       !treeRef.current &&
       xCol &&
       yCol &&
+      xScaled &&
+      yScaled &&
       (xCol.type === "numeric" || xCol.type === "integer") &&
       (yCol.type === "numeric" || yCol.type === "integer")
     ) {
@@ -314,7 +353,9 @@ export function Scatter({ panel }: ScatterProps) {
           xy[2 * i] = NaN;
           xy[2 * i + 1] = NaN;
         } else {
-          const p = t.toPx(xCol.values[i]!, yCol.values[i]!);
+          const xv = xScaled.values;
+      const yv = yScaled.values;
+      const p = t.toPx(xv[i]!, yv[i]!);
           xy[2 * i] = p.x;
           xy[2 * i + 1] = p.y;
         }
@@ -331,7 +372,7 @@ export function Scatter({ panel }: ScatterProps) {
   hullCacheRef.current = null;
   requestPaint();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding]);
+  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, pointSize, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding]);
 
   // Mouse interactions.
   const dragRef = useRef<{
@@ -342,9 +383,80 @@ export function Scatter({ panel }: ScatterProps) {
     localMask: Uint8Array;
     currentRect: { x0: number; y0: number; x1: number; y1: number };
   } | null>(null);
+  const panRef = useRef<{
+    x0: number;
+    y0: number;
+    viewport: ScatterViewport;
+  } | null>(null);
   const edgeEditRef = useRef<{ source: number; target: number | null } | null>(null);
 
+  const applyViewport = (next: ScatterViewport | null) => {
+    setLocalViewport(next);
+    setScatterViewport(panel.id, next);
+  };
+
+  const zoomViewport = (factor: number, px?: number, py?: number) => {
+    const r = rendererRef.current;
+    if (!r) return;
+    const current = r.getViewBounds();
+    const anchor = px == null || py == null
+      ? { x: (current.xMin + current.xMax) / 2, y: (current.yMin + current.yMax) / 2 }
+      : r.transform().toData(px, py);
+    applyViewport({
+      xMin: anchor.x - (anchor.x - current.xMin) * factor,
+      xMax: anchor.x + (current.xMax - anchor.x) * factor,
+      yMin: anchor.y - (anchor.y - current.yMin) * factor,
+      yMax: anchor.y + (current.yMax - anchor.y) * factor,
+    });
+  };
+
+  const resetViewport = () => applyViewport(null);
+
+  const startPan = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const r = rendererRef.current;
+    if (!r) return;
+    const canvasRect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    panRef.current = {
+      x0: e.clientX - canvasRect.left,
+      y0: e.clientY - canvasRect.top,
+      viewport: r.getViewBounds(),
+    };
+    e.preventDefault();
+  };
+
+  const updatePan = (x: number, y: number) => {
+    const pan = panRef.current;
+    const canvas = canvasRef.current;
+    if (!pan || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const innerW = Math.max(1, rect.width - 2 * SCATTER_MARGIN);
+    const innerH = Math.max(1, rect.height - 2 * SCATTER_MARGIN);
+    const xRange = pan.viewport.xMax - pan.viewport.xMin;
+    const yRange = pan.viewport.yMax - pan.viewport.yMin;
+    const dx = -((x - pan.x0) / innerW) * xRange;
+    const dy = ((y - pan.y0) / innerH) * yRange;
+    applyViewport({
+      xMin: pan.viewport.xMin + dx,
+      xMax: pan.viewport.xMax + dx,
+      yMin: pan.viewport.yMin + dy,
+      yMax: pan.viewport.yMax + dy,
+    });
+  };
+
+  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (!rendererRef.current) return;
+    e.preventDefault();
+    const canvasRect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const x = e.clientX - canvasRect.left;
+    const y = e.clientY - canvasRect.top;
+    zoomViewport(e.deltaY < 0 ? 0.8 : 1.25, x, y);
+  };
+
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.shiftKey || e.button === 1) {
+      startPan(e);
+      return;
+    }
     if (edges.editMode !== "none") {
       handleEdgeEditMouseDown(e);
       return;
@@ -377,6 +489,11 @@ export function Scatter({ panel }: ScatterProps) {
     const canvasRect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
     const x = e.clientX - canvasRect.left;
     const y = e.clientY - canvasRect.top;
+
+    if (panRef.current) {
+      updatePan(x, y);
+      return;
+    }
 
     if (edges.editMode !== "none") {
       handleEdgeEditMouseMove(x, y);
@@ -429,6 +546,10 @@ export function Scatter({ panel }: ScatterProps) {
   };
 
   const onMouseUp = (e?: React.MouseEvent<HTMLCanvasElement>) => {
+    if (panRef.current) {
+      panRef.current = null;
+      return;
+    }
     if (edges.editMode !== "none") {
       finishEdgeEdit(e);
       return;
@@ -474,6 +595,7 @@ export function Scatter({ panel }: ScatterProps) {
   const onMouseLeave = () => {
     setTip(null);
     setIdentifyHover(null);
+    panRef.current = null;
     if (edgeEditRef.current) {
       edgeEditRef.current = null;
       if (df) setSelectionMask(new Uint8Array(Math.ceil(df.nrow / 8)));
@@ -517,6 +639,46 @@ export function Scatter({ panel }: ScatterProps) {
   aria-label="point alpha"
   />
   </label>
+  <label className="plot-slider">
+  <span>Size</span>
+  <input
+  className="point-size-slider"
+  type="range"
+  min={1}
+  max={8}
+  step={0.5}
+  value={pointSize}
+  onChange={(e) => setPointSize(parseFloat(e.target.value))}
+  title="point size"
+  aria-label="point size"
+  />
+  </label>
+  <div className="plot-view-controls" aria-label="scatter viewport controls">
+  <button
+  type="button"
+  aria-label="zoom in"
+  title="zoom in"
+  onClick={() => zoomViewport(0.8)}
+  >
+  +
+  </button>
+  <button
+  type="button"
+  aria-label="zoom out"
+  title="zoom out"
+  onClick={() => zoomViewport(1.25)}
+  >
+  -
+  </button>
+  <button
+  type="button"
+  aria-label="reset view"
+  title="reset view"
+  onClick={resetViewport}
+  >
+  Reset
+  </button>
+  </div>
   <button
   className="close"
   aria-label={`remove plot ${panel.id}`}
@@ -532,7 +694,8 @@ export function Scatter({ panel }: ScatterProps) {
   onMouseMove={onMouseMove}
   onMouseUp={onMouseUp}
   onMouseLeave={onMouseLeave}
-  style={{ cursor: edges.editMode === "add" ? "cell" : activeTool === "identify" ? "pointer" : "crosshair" }}
+  onWheel={onWheel}
+  style={{ cursor: panRef.current ? "grabbing" : edges.editMode === "add" ? "cell" : activeTool === "identify" ? "pointer" : "crosshair" }}
   />
   {tip && (
   <div className="plot-tooltip" style={{ left: tip.px, top: tip.py }}>
@@ -656,12 +819,16 @@ export function Scatter({ panel }: ScatterProps) {
     if (
       xCol &&
       yCol &&
+      xScaled &&
+      yScaled &&
       (xCol.type === "numeric" || xCol.type === "integer") &&
       (yCol.type === "numeric" || yCol.type === "integer") &&
       !bitGet(xCol.missing.buffer, row) &&
       !bitGet(yCol.missing.buffer, row)
     ) {
-      return t.toPx(xCol.values[row]!, yCol.values[row]!);
+      const xv = xScaled.values;
+    const yv = yScaled.values;
+    return t.toPx(xv[row]!, yv[row]!);
     }
     return null;
   }
