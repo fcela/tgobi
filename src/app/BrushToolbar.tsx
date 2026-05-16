@@ -1,6 +1,7 @@
 import { useAppStore } from "@/store";
 import { getPalette } from "@/lib/color/palettes";
 import type { BrushTool } from "@/store/types";
+import { HelpPopover } from "@/app/HelpPopover";
 
 const BRUSH_TOOLS: Array<{ name: BrushTool; label: string }> = [
   { name: "rectangle", label: "Rectangle brush" },
@@ -32,6 +33,7 @@ export function BrushToolbar() {
   return (
     <div className="brush-toolbar">
       <span style={{ color: "var(--text-dim)" }}>Brush:</span>
+      <HelpPopover content={<><p className="help-title">Brushing</p><p>Brushing selects points by drawing a shape over them — the most fundamental interaction in exploratory data analysis. Selected points are highlighted across <b>all</b> linked views simultaneously (linked brushing).</p><div className="help-measures"><span className="mname">Rectangle</span><span className="mdesc">Drag to select all points inside a box. Best for rectangular regions.</span><span className="mname">Ellipse</span><span className="mdesc">Drag to select all points inside an ellipse. Good for elliptical clusters.</span><span className="mname">Freeform</span><span className="mdesc">Draw a freehand loop around points. Best for irregularly shaped groups.</span></div><p><b>Transient</b> (default): selection clears when you release the mouse.</p><p><b>Persistent</b>: selection is painted permanently — choose a color and shape, then brush to label groups. This is how you create the "brushed groups" used by classification (LDA) and many other features.</p><p><b>Tip:</b> Use persistent brushing to paint 2+ groups, then try Projection Pursuit with LDA to find views that separate them.</p></>} />
       <div className="brush-tools" role="group" aria-label="brush geometry">
         {BRUSH_TOOLS.map(({ name, label }) => (
           <button
@@ -54,6 +56,7 @@ export function BrushToolbar() {
         />
         Persistent
       </label>
+      <HelpPopover content={<><p className="help-title">Paint Colors</p><p>Choose a color for persistent brushing. When you brush in persistent mode, selected points are permanently painted with this color.</p><p>Painted groups are used as class labels by Projection Pursuit (LDA) and Classification features. Each color = one group.</p><p><b>&times;</b> erases paint — brush with the eraser to remove color from points.</p></>} />
       <div className="swatches" role="group" aria-label="paint colors">
     {BRUSH_COLOR_ORDER.map((colorIndex, slot) => (
       <button
@@ -75,6 +78,7 @@ export function BrushToolbar() {
       &times;
     </button>
       </div>
+      <HelpPopover content={<><p className="help-title">Point Shapes</p><p>Assign a visual shape to painted points. Different shapes help distinguish groups even in black-and-white or for colorblind users.</p><p>Shapes are also stored per-point and can be used to mark different classes or categories.</p></>} />
       <div className="shape-buttons" role="group" aria-label="paint shapes">
         {SHAPES.map(({ name, index }) => (
           <button

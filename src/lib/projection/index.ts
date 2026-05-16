@@ -5,3 +5,4 @@ export { icaProject } from "./ica";
 export { tsneProject } from "./tsne";
 export { umapProject } from "./umap";
 export { permutationImportance } from "./permutation";
+export { procrustesAlign } from "./procrustes";

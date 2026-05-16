@@ -4,11 +4,11 @@ import { ArrayDataFrame } from "@/lib/data/dataframe";
 import { makeNumericColumn, makeCategoricalColumn } from "@/lib/data/columns";
 import { bitGet } from "@/lib/brush/hitTest";
 
-const tick = () => new Promise<void>((r) => setTimeout(r, 10));
+const tick = () => new Promise<void>((r) => setTimeout(r, 50));
 
 beforeEach(() => {
   useAppStore.getState().clear();
-  useAppStore.getState().clearClassification();
+  useAppStore.getState().resetClassification();
 });
 
 describe("ClassificationSlice", () => {
@@ -93,18 +93,7 @@ describe("ClassificationSlice", () => {
     expect(c.running).toBe(false);
   });
 
-  it("clearClassification resets all state", () => {
-    useAppStore.getState().setClassificationMethod("randomforest");
-    useAppStore.getState().setClassificationVariables(["x", "y"]);
-    useAppStore.getState().setClassificationKnnK(10);
-    useAppStore.getState().clearClassification();
-    const c = useAppStore.getState().classification;
-    expect(c.method).toBe("knn");
-    expect(c.variables).toEqual([]);
-    expect(c.knnK).toBe(5);
-  });
-
-  it("applyClassificationBoundaries does not extend df; overlay is separate", async () => {
+  it("clearClassification trims df and hides boundaries, keeps model", async () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
       makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
@@ -112,7 +101,64 @@ describe("ClassificationSlice", () => {
     useAppStore.getState().setData(df);
     useAppStore.getState().setSelectionPaint(new Uint8Array([1, 1, 2, 2]));
     useAppStore.getState().setClassificationVariables(["a", "b"]);
-    useAppStore.getState().setClassificationGridResolution(2);
+    useAppStore.getState().setClassificationGridResolution(3);
+    useAppStore.getState().runClassification();
+    await tick();
+    useAppStore.getState().applyClassificationBoundaries();
+    expect(useAppStore.getState().classification.boundariesVisible).toBe(true);
+    const extendedN = useAppStore.getState().df!.nrow;
+    expect(extendedN).toBeGreaterThan(df.nrow);
+
+    useAppStore.getState().clearClassification();
+    const c = useAppStore.getState().classification;
+    expect(c.boundariesVisible).toBe(false);
+    expect(c.predictions).not.toBeNull();
+    expect(c.boundaryPaint).not.toBeNull();
+    expect(useAppStore.getState().df!.nrow).toBe(df.nrow);
+  });
+
+  it("resetClassification resets all state", () => {
+    useAppStore.getState().setClassificationMethod("randomforest");
+    useAppStore.getState().setClassificationVariables(["x", "y"]);
+    useAppStore.getState().setClassificationKnnK(10);
+    useAppStore.getState().resetClassification();
+    const c = useAppStore.getState().classification;
+    expect(c.method).toBe("knn");
+    expect(c.variables).toEqual([]);
+    expect(c.knnK).toBe(5);
+  });
+
+  it("runClassification produces boundaryProbabilities with painted groups", async () => {
+    const df = new ArrayDataFrame([
+      makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
+      makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
+    ]);
+    useAppStore.getState().setData(df);
+    useAppStore.getState().setSelectionPaint(new Uint8Array([1, 1, 2, 2]));
+    useAppStore.getState().setClassificationVariables(["a", "b"]);
+    useAppStore.getState().setClassificationGridResolution(3);
+    useAppStore.getState().runClassification();
+    await tick();
+
+    const c = useAppStore.getState().classification;
+    expect(c.boundaryProbabilities).not.toBeNull();
+    expect(c.boundaryProbabilities!.length).toBe(c.gridSize);
+    for (let i = 0; i < c.gridSize; i++) {
+      const p = c.boundaryProbabilities![i]!;
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("applyClassificationBoundaries extends df with boundary rows and sets shapes", async () => {
+    const df = new ArrayDataFrame([
+      makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
+      makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
+    ]);
+    useAppStore.getState().setData(df);
+    useAppStore.getState().setSelectionPaint(new Uint8Array([1, 1, 2, 2]));
+    useAppStore.getState().setClassificationVariables(["a", "b"]);
+    useAppStore.getState().setClassificationGridResolution(4);
     useAppStore.getState().runClassification();
     await tick();
 
@@ -124,8 +170,35 @@ describe("ClassificationSlice", () => {
 
     useAppStore.getState().applyClassificationBoundaries();
     const state = useAppStore.getState();
-    expect(state.df!.nrow).toBe(origN);
+    expect(state.df!.nrow).toBeGreaterThan(origN);
+    expect(state.classification.boundaryNOrig).toBe(origN);
     expect(state.color.encoding.kind).toBe("paint");
+    expect(state.classification.boundariesVisible).toBe(true);
+
+    for (let i = origN; i < state.df!.nrow; i++) {
+      expect(state.selection.shape[i]).toBe(6);
+    }
+  });
+
+  it("clearClassification trims df back to original rows", async () => {
+    const df = new ArrayDataFrame([
+      makeNumericColumn("a", new Float64Array([0, 0.1, 10, 10.1])),
+      makeNumericColumn("b", new Float64Array([0, 0.1, 10, 10.1])),
+    ]);
+    useAppStore.getState().setData(df);
+    useAppStore.getState().setSelectionPaint(new Uint8Array([1, 1, 2, 2]));
+    useAppStore.getState().setClassificationVariables(["a", "b"]);
+    useAppStore.getState().setClassificationGridResolution(3);
+    useAppStore.getState().runClassification();
+    await tick();
+    useAppStore.getState().applyClassificationBoundaries();
+    const extendedN = useAppStore.getState().df!.nrow;
+    expect(extendedN).toBeGreaterThan(df.nrow);
+
+    useAppStore.getState().clearClassification();
+    expect(useAppStore.getState().df!.nrow).toBe(df.nrow);
+    expect(useAppStore.getState().classification.boundariesVisible).toBe(false);
+    expect(useAppStore.getState().classification.boundaryNOrig).toBe(0);
   });
 
   it("runClassification works with categorical class source", async () => {

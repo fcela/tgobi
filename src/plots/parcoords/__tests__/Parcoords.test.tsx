@@ -52,7 +52,7 @@ beforeEach(() => {
 describe("Parcoords", () => {
   it("renders a card with the panel's variable names in the header", () => {
     render(
-      <Parcoords panel={{ id: 1, kind: "parcoords", variables: ["a", "b", "c"] }} />,
+      <Parcoords panel={{ id: 1, kind: "parcoords", variables: ["a", "b", "c"], condVar: null }} />,
     );
     expect(screen.getByText(/parcoords/i)).toBeInTheDocument();
     expect(screen.getByText(/a.*b.*c/)).toBeInTheDocument();
@@ -62,7 +62,7 @@ describe("Parcoords", () => {
     useAppStore.getState().addParcoords(["a", "b"]);
     const panels = useAppStore.getState().plots.panels;
     const panel = panels[0]!;
-    render(<Parcoords panel={{ id: panel.id, kind: "parcoords", variables: ["a", "b"] }} />);
+    render(<Parcoords panel={{ id: panel.id, kind: "parcoords", variables: ["a", "b"], condVar: null }} />);
     const closeBtn = screen.getByLabelText(/remove plot/i);
     closeBtn.click();
     expect(useAppStore.getState().plots.panels.find((p) => p.id === panel.id)).toBeUndefined();
@@ -72,7 +72,7 @@ describe("Parcoords", () => {
     // jsdom's canvas.getContext("2d") returns null — the component must handle this gracefully
     expect(() => {
       render(
-        <Parcoords panel={{ id: 99, kind: "parcoords", variables: ["a", "b"] }} />,
+        <Parcoords panel={{ id: 99, kind: "parcoords", variables: ["a", "b"], condVar: null }} />,
       );
     }).not.toThrow();
     // header should still be present
@@ -83,7 +83,7 @@ describe("Parcoords", () => {
     useAppStore.getState().togglePinnedIdentify(1);
 
     render(
-      <Parcoords panel={{ id: 11, kind: "parcoords", variables: ["a", "b", "c"] }} />,
+      <Parcoords panel={{ id: 11, kind: "parcoords", variables: ["a", "b", "c"], condVar: null }} />,
     );
 
     expect(await screen.findByTestId("pinned-parcoords-label-1")).toHaveTextContent("row 2");
@@ -94,7 +94,7 @@ describe("Parcoords", () => {
     useAppStore.getState().setPaintColor(4);
     useAppStore.getState().setPaintShape(2);
     const { container } = render(
-      <Parcoords panel={{ id: 7, kind: "parcoords", variables: ["a", "b"] }} />,
+      <Parcoords panel={{ id: 7, kind: "parcoords", variables: ["a", "b"], condVar: null }} />,
     );
     const canvas = container.querySelector("canvas");
     if (!canvas) throw new Error("canvas not found");

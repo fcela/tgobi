@@ -3,7 +3,6 @@ import type { Regl, DrawCommand } from "regl";
 import type {
   BiplotOverlay,
   BrushOverlay,
-  ContourOverlay,
   DensityOverlay,
   EdgeOverlay,
   HullOverlay,
@@ -112,10 +111,10 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
 
   attach(canvas: HTMLCanvasElement): void {
     this.#canvas = canvas;
-    // create regl; throws if webgl is not supported
-    this.#regl = createRegl({ canvas, extensions: [] });
-    
-    // create overlay for brush
+  // create regl; throws if webgl is not supported
+  this.#regl = createRegl({ canvas, extensions: [] });
+
+  // create foreground overlay for brush, hulls, labels
     this.#overlay = document.createElement("canvas");
     this.#overlay.style.position = "absolute";
     this.#overlay.style.top = "0";
@@ -221,6 +220,11 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
         float d = min(d1, d2);
         if (d > 0.35) discard;
         if (v_pass == 2.0 && d < 0.15) discard;
+      } else if (v_shape <= 6.5) { // ring (outline circle)
+        float dist = length(pc);
+        if (dist > 1.0) discard;
+        if (dist < 0.55) discard;
+        if (v_pass == 2.0 && dist < 0.75) discard;
       } else {
         float dist = length(pc);
         if (dist > 1.0) discard;
@@ -440,7 +444,6 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
     activeBrush: BrushOverlay | null,
     edgeOverlay: EdgeOverlay | null = null,
     hullOverlay: HullOverlay | null = null,
-    contourOverlay: ContourOverlay | null = null,
     densityOverlay: DensityOverlay | null = null,
     biplotOverlay: BiplotOverlay | null = null,
     rugOverlay: RugOverlay | null = null,
@@ -449,7 +452,6 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   if (!this.#regl || !this.#drawPoints) return;
   const n = this.#count;
   if (n === 0) return;
-  console.info("[regl] draw, n=", n, "w=", this.#w, "h=", this.#h, "alpha=", visual.alpha);
 
     this.#regl._refresh();
 
@@ -528,13 +530,12 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
     props.u_pass = 2; this.#drawPoints(props); // selected halos
 
   // Frame
-  if (this.#overlayCtx) {
-    this.#overlayCtx.clearRect(0, 0, this.#w, this.#h);
-    this.#drawContourOverlay(contourOverlay);
-    this.#drawDensityOverlay(densityOverlay);
-    this.#drawBiplotOverlay(biplotOverlay);
-    this.#drawRugOverlay(rugOverlay);
-    this.#drawLoessOverlay(loessOverlay);
+    if (this.#overlayCtx) {
+      this.#overlayCtx.clearRect(0, 0, this.#w, this.#h);
+      this.#drawDensityOverlay(densityOverlay);
+      this.#drawBiplotOverlay(biplotOverlay);
+      this.#drawRugOverlay(rugOverlay);
+      this.#drawLoessOverlay(loessOverlay);
     drawHullOverlay(this.#overlayCtx, hullOverlay);
     this.#overlayCtx.strokeStyle = "#2a2a2a";
     this.#overlayCtx.lineWidth = 1;
@@ -566,40 +567,6 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
       this.#overlayCtx.globalAlpha = 1;
     }
   }
-  }
-
-  #drawContourOverlay(overlay: ContourOverlay | null): void {
-    if (!overlay || !this.#overlayCtx || overlay.nVars < 2) return;
-    const { grid, paint, resolution, nVars, mins, maxs, paintPalette, alpha } = overlay;
-    const view = this.getViewBounds();
-    const innerW = Math.max(1, this.#w - 2 * MARGIN);
-    const innerH = Math.max(1, this.#h - 2 * MARGIN);
-    const toPx = (dx: number, dy: number) => ({
-      x: MARGIN + ((dx - view.xMin) / (view.xMax - view.xMin)) * innerW,
-      y: MARGIN + (1 - (dy - view.yMin) / (view.yMax - view.yMin)) * innerH,
-    });
-    const res = resolution;
-    const dx = nVars >= 1 ? (maxs[0]! - mins[0]!) / Math.max(1, res - 1) : 0;
-    const dy = nVars >= 2 ? (maxs[1]! - mins[1]!) / Math.max(1, res - 1) : 0;
-    const pC = toPx(mins[0]! - dx / 2, mins[1]! - dy / 2);
-    const pR = toPx(mins[0]! + dx / 2, mins[1]! - dy / 2);
-    const pU = toPx(mins[0]! - dx / 2, mins[1]! + dy / 2);
-    const cellW = Math.abs(pR.x - pC.x);
-    const cellH = Math.abs(pU.y - pC.y);
-    const nGrid = paint.length;
-    this.#overlayCtx.globalAlpha = alpha;
-    for (let idx = 0; idx < nGrid; idx++) {
-      const paintIdx = paint[idx]!;
-      if (paintIdx <= 0) continue;
-      const color = paintPalette[paintIdx - 1];
-      if (!color) continue;
-      const xVal = grid[idx * nVars]!;
-      const yVal = grid[idx * nVars + 1]!;
-      const p = toPx(xVal, yVal);
-      this.#overlayCtx.fillStyle = color;
-      this.#overlayCtx.fillRect(p.x - cellW / 2, p.y - cellH / 2, cellW, cellH);
-    }
-    this.#overlayCtx.globalAlpha = 1;
   }
 
   #drawDensityOverlay(overlay: DensityOverlay | null): void {

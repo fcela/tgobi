@@ -1,14 +1,52 @@
 import type { StateCreator } from "zustand";
 import type { AppStore, ProjectionSlice } from "@/store/types";
+import type { ProjectionMethod, ProjectionResult } from "@/lib/projection/types";
 import { pcaProject } from "@/lib/projection/pca";
 import { mdsProject } from "@/lib/projection/mds";
 import { icaProject } from "@/lib/projection/ica";
 import { tsneProject } from "@/lib/projection/tsne";
 import { umapProject } from "@/lib/projection/umap";
-import type { ProjectionMethod, ProjectionResult } from "@/lib/projection/types";
+import { computeDRQuality } from "@/lib/projection/quality";
 import { ArrayDataFrame } from "@/lib/data/dataframe";
 import { makeNumericColumn } from "@/lib/data/columns";
 import { bitGet } from "@/lib/brush/hitTest";
+import { procrustesAlign } from "@/lib/projection/procrustes";
+
+let ProjWorkerClass: (new () => Worker) | null = null;
+let projWorkerLoaded = false;
+async function loadProjWorker(): Promise<(new () => Worker) | null> {
+  if (projWorkerLoaded) return ProjWorkerClass;
+  projWorkerLoaded = true;
+  if (typeof Worker === "undefined") return null;
+  try {
+    const mod = await import("@/workers/projection.worker.ts?worker");
+    ProjWorkerClass = mod.default;
+    return ProjWorkerClass;
+  } catch {
+    return null;
+  }
+}
+
+function projectSync(
+  method: ProjectionMethod,
+  data: Float64Array,
+  n: number,
+  p: number,
+  nComponents: number,
+  tsnePerplexity: number,
+  tsneIterations: number,
+  umapNNeighbors: number,
+  umapMinDist: number,
+): ProjectionResult {
+  switch (method) {
+    case "pca": return pcaProject(data, n, p, nComponents);
+    case "mds": return mdsProject(data, n, p, nComponents);
+    case "ica": return icaProject(data, n, p, nComponents);
+    case "tsne": return tsneProject(data, n, p, nComponents, tsnePerplexity, tsneIterations);
+    case "umap": return umapProject(data, n, p, nComponents, umapNNeighbors, umapMinDist);
+    default: throw new Error(`Unknown projection method: ${method}`);
+  }
+}
 
 export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSlice> = (set, get) => ({
   projection: {
@@ -28,16 +66,21 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
     varImportance: null,
     running: false,
     error: null,
+    morphEmbeddings: null,
+    morphIndex: 0,
+    morphT: 0,
+    morphPlaying: false,
+    quality: null,
   },
 
   setProjectionMethod: (method) =>
-    set((s) => ({ projection: { ...s.projection, method, embedding: null, explainedVar: null, stress: null, loadings: null, varImportance: null, error: null } })),
+    set((s) => ({ projection: { ...s.projection, method, embedding: null, explainedVar: null, stress: null, loadings: null, varImportance: null, error: null, quality: null } })),
 
   setProjectionVariables: (variables) =>
-    set((s) => ({ projection: { ...s.projection, variables, embedding: null, explainedVar: null, stress: null, loadings: null, varImportance: null, error: null } })),
+    set((s) => ({ projection: { ...s.projection, variables, embedding: null, explainedVar: null, stress: null, loadings: null, varImportance: null, error: null, quality: null } })),
 
   setProjectionNComponents: (nComponents) =>
-    set((s) => ({ projection: { ...s.projection, nComponents, embedding: null, explainedVar: null, stress: null, loadings: null, varImportance: null, error: null } })),
+    set((s) => ({ projection: { ...s.projection, nComponents, embedding: null, explainedVar: null, stress: null, loadings: null, varImportance: null, error: null, quality: null } })),
 
   setProjectionDimX: (dimX) =>
     set((s) => ({ projection: { ...s.projection, dimX } })),
@@ -46,16 +89,16 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
     set((s) => ({ projection: { ...s.projection, dimY } })),
 
   setProjectionTsnePerplexity: (tsnePerplexity) =>
-    set((s) => ({ projection: { ...s.projection, tsnePerplexity, embedding: null, error: null } })),
+    set((s) => ({ projection: { ...s.projection, tsnePerplexity, embedding: null, error: null, quality: null } })),
 
   setProjectionTsneIterations: (tsneIterations) =>
-    set((s) => ({ projection: { ...s.projection, tsneIterations, embedding: null, error: null } })),
+    set((s) => ({ projection: { ...s.projection, tsneIterations, embedding: null, error: null, quality: null } })),
 
   setProjectionUmapNNeighbors: (umapNNeighbors) =>
-    set((s) => ({ projection: { ...s.projection, umapNNeighbors, embedding: null, error: null } })),
+    set((s) => ({ projection: { ...s.projection, umapNNeighbors, embedding: null, error: null, quality: null } })),
 
   setProjectionUmapMinDist: (umapMinDist) =>
-    set((s) => ({ projection: { ...s.projection, umapMinDist, embedding: null, error: null } })),
+    set((s) => ({ projection: { ...s.projection, umapMinDist, embedding: null, error: null, quality: null } })),
 
   runProjection: () => {
     const { df } = get();
@@ -79,58 +122,78 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
 
     set((s) => ({ projection: { ...s.projection, running: true, error: null } }));
 
-    setTimeout(() => {
-    try {
-      const rows: number[] = [];
-      for (let i = 0; i < df.nrow; i++) {
-        if (bitGet(shadow, i)) continue;
-        let valid = true;
-        for (const col of columns) {
-          if (col!.missing.isMissing(i)) { valid = false; break; }
-        }
-        if (valid) rows.push(i);
+    const rows: number[] = [];
+    for (let i = 0; i < df.nrow; i++) {
+      if (bitGet(shadow, i)) continue;
+      let valid = true;
+      for (const col of columns) {
+        if (col!.missing.isMissing(i)) { valid = false; break; }
       }
+      if (valid) rows.push(i);
+    }
 
-      if (rows.length < 3) {
-        set((s) => ({ projection: { ...s.projection, running: false, error: "Need at least 3 non-shadowed complete rows" } }));
-        return;
+    if (rows.length < 3) {
+      set((s) => ({ projection: { ...s.projection, running: false, error: "Need at least 3 non-shadowed complete rows" } }));
+      return;
+    }
+
+    const n = rows.length;
+    const data = new Float64Array(n * p);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < p; j++) {
+        const col = columns[j]!;
+        const val = col.type === "integer" ? col.values[rows[i]!] : col.type === "numeric" ? col.values[rows[i]!] : 0;
+        data[i * p + j] = val ?? 0;
       }
+    }
 
-      const n = rows.length;
-      const data = new Float64Array(n * p);
-      for (let i = 0; i < n; i++) {
-        for (let j = 0; j < p; j++) {
-          const col = columns[j]!;
-          const val = col.type === "integer" ? col.values[rows[i]!] : col.type === "numeric" ? col.values[rows[i]!] : 0;
-          data[i * p + j] = val ?? 0;
-        }
+    const maxN = method === "mds" ? 2000 : n;
+    const usedData = n > maxN ? subsampleRows(data, n, p, maxN) : data;
+    const usedN = Math.min(n, maxN);
+
+    loadProjWorker().then((WorkerClass) => {
+      if (WorkerClass) {
+        const worker = new WorkerClass() as Worker;
+        worker.onmessage = (e: MessageEvent<{ kind: "result"; result: ProjectionResult } | { kind: "error"; error: string }>) => {
+          worker.terminate();
+          const msg = e.data;
+          if (msg.kind === "error") {
+            set((s) => ({ projection: { ...s.projection, running: false, error: msg.error } }));
+            return;
+          }
+          const result = msg.result;
+          finishProjection(result);
+        };
+        worker.onerror = (err) => {
+          worker.terminate();
+          set((s) => ({ projection: { ...s.projection, running: false, error: err.message } }));
+        };
+        const dataCopy = new Float64Array(usedData);
+        worker.postMessage({
+          data: dataCopy,
+          n: usedN,
+          p,
+          nComponents,
+          method,
+          tsnePerplexity,
+          tsneIterations,
+          umapNNeighbors,
+          umapMinDist,
+        }, [dataCopy.buffer]);
+      } else {
+        setTimeout(() => {
+          try {
+            const result = projectSync(method, usedData, usedN, p, nComponents, tsnePerplexity, tsneIterations, umapNNeighbors, umapMinDist);
+            finishProjection(result);
+          } catch (e) {
+            set((s) => ({ projection: { ...s.projection, running: false, error: e instanceof Error ? e.message : String(e) } }));
+          }
+        }, 0);
       }
+    });
 
-      const maxN = method === "mds" ? 2000 : n;
-      const usedData = n > maxN ? subsampleRows(data, n, p, maxN) : data;
-      const usedN = Math.min(n, maxN);
-
-      let result: ProjectionResult;
-      switch (method as ProjectionMethod) {
-        case "pca":
-          result = pcaProject(usedData, usedN, p, nComponents);
-          break;
-        case "mds":
-          result = mdsProject(usedData, usedN, p, nComponents);
-          break;
-        case "ica":
-          result = icaProject(usedData, usedN, p, nComponents);
-          break;
-        case "tsne":
-          result = tsneProject(usedData, usedN, p, nComponents, tsnePerplexity, tsneIterations);
-          break;
-        case "umap":
-          result = umapProject(usedData, usedN, p, nComponents, umapNNeighbors, umapMinDist);
-          break;
-        default:
-          throw new Error(`Unknown projection method: ${method}`);
-      }
-
+    function finishProjection(result: ProjectionResult) {
+      if (!df) return;
       const fullEmbedding = new Float64Array(df.nrow * result.nComponents);
       for (let i = 0; i < n; i++) {
         for (let c = 0; c < result.nComponents; c++) {
@@ -138,28 +201,31 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
         }
       }
 
-        set((s) => ({
-          projection: {
-            ...s.projection,
-            embedding: fullEmbedding,
-            explainedVar: result.explainedVar,
-            stress: result.stress,
-            loadings: result.loadings,
-            varImportance: result.varImportance,
-            nComponents: result.nComponents,
-            running: false,
-          },
-        }));
-    } catch (e) {
+      let quality: import("@/store/types").ProjectionQuality | null = null;
+      try {
+        const qm = computeDRQuality(usedData, result.embedding, usedN, p, result.nComponents);
+        quality = {
+          trustworthiness: qm.trustworthiness,
+          continuity: qm.continuity,
+          shepardOrigDists: qm.shepardOrigDists,
+          shepardEmbDists: qm.shepardEmbDists,
+        };
+      } catch { /* quality computation is best-effort */ }
+
       set((s) => ({
         projection: {
           ...s.projection,
+          embedding: fullEmbedding,
+          explainedVar: result.explainedVar,
+          stress: result.stress,
+          loadings: result.loadings,
+          varImportance: result.varImportance,
+          nComponents: result.nComponents,
           running: false,
-          error: e instanceof Error ? e.message : String(e),
+          quality,
         },
       }));
     }
-    }, 0);
   },
 
   materializeProjection: () => {
@@ -218,7 +284,128 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
         varImportance: null,
         running: false,
         error: null,
+        morphEmbeddings: null,
+        morphIndex: 0,
+        morphT: 0,
+        morphPlaying: false,
+        quality: null,
       },
+    })),
+
+  compareDR: () => {
+    const { df } = get();
+    const { variables } = get().projection;
+    const { shadow } = get().selection;
+
+    const vars = variables.length >= 2 ? variables : (get().tour.activeVars.length >= 2 ? get().tour.activeVars : variables);
+
+    if (!df || vars.length < 2) {
+      set((s) => ({ projection: { ...s.projection, error: "Need data and 2+ variables" } }));
+      return;
+    }
+
+    set((s) => ({ projection: { ...s.projection, running: true, error: null } }));
+
+    setTimeout(() => {
+      try {
+        const p = vars.length;
+        const columns = vars.map((name) => df.column(name));
+        for (const col of columns) {
+          if (!col || (col.type !== "numeric" && col.type !== "integer")) {
+            throw new Error(`Variable "${col?.name ?? "?"}" is not numeric`);
+          }
+        }
+
+        const rows: number[] = [];
+        for (let i = 0; i < df.nrow; i++) {
+          if (bitGet(shadow, i)) continue;
+          let valid = true;
+          for (const col of columns) {
+            if (col!.missing.isMissing(i)) { valid = false; break; }
+          }
+          if (valid) rows.push(i);
+        }
+
+        if (rows.length < 4) {
+          set((s) => ({ projection: { ...s.projection, running: false, error: "Need at least 4 non-shadowed complete rows" } }));
+          return;
+        }
+
+        const n = rows.length;
+        const data = new Float64Array(n * p);
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < p; j++) {
+            const col = columns[j]!;
+            const val = col.type === "integer" ? col.values[rows[i]!] : col.type === "numeric" ? col.values[rows[i]!] : 0;
+            data[i * p + j] = val ?? 0;
+          }
+        }
+
+        const usedN = Math.min(n, 2000);
+        const usedData = n > 2000 ? subsampleRows(data, n, p, 2000) : data;
+
+        const refResult = pcaProject(usedData, usedN, p, 2);
+        const refEmbed = refResult.embedding;
+
+        const methods: { key: ProjectionMethod; label: string; fn: () => Float64Array }[] = [
+          { key: "pca", label: "PCA", fn: () => refEmbed },
+          { key: "mds", label: "MDS", fn: () => mdsProject(usedData, usedN, p, 2).embedding },
+          { key: "ica", label: "ICA", fn: () => icaProject(usedData, usedN, p, 2).embedding },
+          { key: "tsne", label: "t-SNE", fn: () => tsneProject(usedData, usedN, p, 2, 30, 500).embedding },
+          { key: "umap", label: "UMAP", fn: () => umapProject(usedData, usedN, p, 2, 15, 0.1).embedding },
+        ];
+
+        const morphEmbeddings: { label: string; embedding: Float64Array }[] = [];
+        for (const { key, label, fn } of methods) {
+          let embed: Float64Array;
+          if (key === "pca") {
+            embed = refEmbed;
+          } else {
+            const rawEmbed = fn();
+            embed = procrustesAlign(refEmbed, rawEmbed, usedN);
+          }
+          const fullEmbed = new Float64Array(df.nrow * 2);
+          for (let i = 0; i < n; i++) {
+            fullEmbed[rows[i]! * 2] = embed[i * 2]!;
+            fullEmbed[rows[i]! * 2 + 1] = embed[i * 2 + 1]!;
+          }
+          morphEmbeddings.push({ label, embedding: fullEmbed });
+        }
+
+        set((s) => ({
+          projection: {
+            ...s.projection,
+            running: false,
+            morphEmbeddings,
+            morphIndex: 0,
+            morphT: 0,
+            morphPlaying: false,
+          },
+        }));
+      } catch (e) {
+        set((s) => ({
+          projection: {
+            ...s.projection,
+            running: false,
+            error: e instanceof Error ? e.message : String(e),
+          },
+        }));
+      }
+    }, 0);
+  },
+
+  setMorphIndex: (i) =>
+    set((s) => ({ projection: { ...s.projection, morphIndex: i, morphT: 0 } })),
+
+  setMorphT: (t) =>
+    set((s) => ({ projection: { ...s.projection, morphT: t } })),
+
+  setMorphPlaying: (playing) =>
+    set((s) => ({ projection: { ...s.projection, morphPlaying: playing } })),
+
+  stopMorph: () =>
+    set((s) => ({
+      projection: { ...s.projection, morphPlaying: false, morphT: 0, morphIndex: 0 },
     })),
 });
 

@@ -4,16 +4,17 @@ interface ClampedInputProps {
   value: number;
   min: number;
   max: number;
+  step?: number;
   ariaLabel: string;
   onChange: (v: number) => void;
 }
 
-export function ClampedInput({ value, min, max, ariaLabel, onChange }: ClampedInputProps) {
+export function ClampedInput({ value, min, max, step = 1, ariaLabel, onChange }: ClampedInputProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const display = draft ?? String(value);
 
   const commit = useCallback(() => {
-    const parsed = parseInt(draft ?? "", 10);
+    const parsed = parseFloat(draft ?? "");
     if (Number.isNaN(parsed)) {
       setDraft(null);
       return;
@@ -28,6 +29,7 @@ export function ClampedInput({ value, min, max, ariaLabel, onChange }: ClampedIn
       type="number"
       min={min}
       max={max}
+      step={step}
       value={display}
       aria-label={ariaLabel}
       onChange={(e) => setDraft(e.target.value)}

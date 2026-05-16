@@ -121,10 +121,11 @@ describe("AddPlotMenu", () => {
     const cCheck = screen.getByLabelText(/parcoords variable c/i);
     fireEvent.click(cCheck); // uncheck c
     fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
-    expect(useAppStore.getState().plots.panels[0]).toMatchObject({
-      kind: "parcoords",
-      variables: ["a", "b"],
-    });
+  expect(useAppStore.getState().plots.panels[0]).toMatchObject({
+    kind: "parcoords",
+    variables: ["a", "b"],
+    condVar: null,
+  });
   });
 
   it("parcoords Add button is disabled when fewer than 2 vars are selected", () => {

@@ -25,6 +25,9 @@ describe("TourSlice", () => {
     expect(t.manualVar).toBeNull();
     expect(t.manualValue).toBe(0);
     expect(t.savedViews).toEqual([]);
+    expect(t.keyframes).toEqual([]);
+    expect(t.scrubberT).toBe(0);
+    expect(t.scrubbing).toBe(false);
   });
 
   it("startTour activates and plays", () => {
@@ -118,6 +121,21 @@ describe("TourSlice", () => {
     expect(useAppStore.getState().tour.mode).toBe("manual");
   });
 
+  it("setTourMode supports guided", () => {
+    useAppStore.getState().setTourMode("guided");
+    expect(useAppStore.getState().tour.mode).toBe("guided");
+  });
+
+  it("setTourMode clears frozen and manual when switching to guided", () => {
+    useAppStore.getState().startTour(1, "2d", ["a", "b"]);
+    useAppStore.getState().setManualVarValue("a", 0.5);
+    useAppStore.getState().setTourMode("guided");
+    const t = useAppStore.getState().tour;
+    expect(t.frozenVars).toEqual([]);
+    expect(t.manualVar).toBeNull();
+    expect(t.manualValue).toBe(0);
+  });
+
   it("saveCurrentView and restoreView", () => {
     useAppStore.getState().startTour(3, "2d", ["a", "b"]);
     useAppStore.getState().setTourFrame(
@@ -148,5 +166,120 @@ describe("TourSlice", () => {
     const id = useAppStore.getState().saveCurrentView("v");
     useAppStore.getState().removeView(id);
     expect(useAppStore.getState().tour.savedViews).toHaveLength(0);
+  });
+
+  it("addKeyframe adds a keyframe", () => {
+    const basis = new Float64Array([1, 0, 0, 1]);
+    const id = useAppStore.getState().addKeyframe(basis, "random", "test kf");
+    const kfs = useAppStore.getState().tour.keyframes;
+    expect(kfs).toHaveLength(1);
+    expect(kfs[0]!.id).toBe(id);
+    expect(kfs[0]!.name).toBe("test kf");
+    expect(kfs[0]!.source).toBe("random");
+    expect(Array.from(kfs[0]!.basis)).toEqual([1, 0, 0, 1]);
+  });
+
+  it("addKeyframe makes a copy of basis", () => {
+    const basis = new Float64Array([1, 0, 0, 1]);
+    useAppStore.getState().addKeyframe(basis, "random");
+    basis[0] = 99;
+    const kf = useAppStore.getState().tour.keyframes[0]!;
+    expect(kf.basis[0]).toBe(1);
+  });
+
+  it("removeKeyframe removes by id", () => {
+    const id1 = useAppStore.getState().addKeyframe(new Float64Array([1, 0, 0, 1]), "random", "kf1");
+    const id2 = useAppStore.getState().addKeyframe(new Float64Array([0, 1, 1, 0]), "saved", "kf2");
+    expect(useAppStore.getState().tour.keyframes).toHaveLength(2);
+    useAppStore.getState().removeKeyframe(id1);
+    const kfs = useAppStore.getState().tour.keyframes;
+    expect(kfs).toHaveLength(1);
+    expect(kfs[0]!.id).toBe(id2);
+  });
+
+  it("clearKeyframes removes all keyframes", () => {
+    useAppStore.getState().addKeyframe(new Float64Array([1, 0, 0, 1]), "random");
+    useAppStore.getState().addKeyframe(new Float64Array([0, 1, 1, 0]), "saved");
+    useAppStore.getState().clearKeyframes();
+    expect(useAppStore.getState().tour.keyframes).toHaveLength(0);
+  });
+
+  it("setScrubberT updates scrubber position", () => {
+    useAppStore.getState().setScrubberT(0.5);
+    expect(useAppStore.getState().tour.scrubberT).toBe(0.5);
+  });
+
+  it("setScrubbing toggles scrubbing state", () => {
+    useAppStore.getState().setScrubbing(true);
+    expect(useAppStore.getState().tour.scrubbing).toBe(true);
+    useAppStore.getState().setScrubbing(false);
+    expect(useAppStore.getState().tour.scrubbing).toBe(false);
+  });
+
+  it("addSavedViewAsKeyframe adds a saved view as keyframe", () => {
+    useAppStore.getState().startTour(3, "2d", ["a", "b"]);
+    useAppStore.getState().setTourFrame(
+      new Float64Array([1, 0, 0, 1]),
+      new Float64Array([0.1, 0.2]),
+      0,
+    );
+    const viewId = useAppStore.getState().saveCurrentView("my view");
+    useAppStore.getState().addSavedViewAsKeyframe(viewId);
+    const kfs = useAppStore.getState().tour.keyframes;
+    expect(kfs).toHaveLength(1);
+    expect(kfs[0]!.source).toBe("saved");
+    expect(kfs[0]!.name).toBe("my view");
+  });
+
+  it("startTour clears keyframes and scrubber state", () => {
+    useAppStore.getState().addKeyframe(new Float64Array([1, 0, 0, 1]), "random");
+    useAppStore.getState().setScrubberT(0.7);
+    useAppStore.getState().setScrubbing(true);
+    useAppStore.getState().startTour(1, "2d", ["a", "b"]);
+    const t = useAppStore.getState().tour;
+    expect(t.keyframes).toHaveLength(0);
+    expect(t.scrubberT).toBe(0);
+    expect(t.scrubbing).toBe(false);
+  });
+
+  it("stopTour clears keyframes and scrubber state", () => {
+    useAppStore.getState().addKeyframe(new Float64Array([1, 0, 0, 1]), "random");
+    useAppStore.getState().setScrubbing(true);
+    useAppStore.getState().stopTour();
+    const t = useAppStore.getState().tour;
+    expect(t.keyframes).toHaveLength(0);
+    expect(t.scrubbing).toBe(false);
+  });
+
+  it("setTourShape retargets activePanelId to compatible panel", () => {
+    const scatterId = useAppStore.getState().addScatter("x", "y");
+    const dotplotId = useAppStore.getState().addDotplot("x");
+    useAppStore.getState().startTour(scatterId, "2d", ["x", "y"]);
+    useAppStore.getState().setTourFrame(
+      new Float64Array([1, 0, 0, 1]),
+      new Float64Array([0.1, 0.2, 0.3, 0.4]),
+      0,
+    );
+    useAppStore.getState().setTourShape("1d");
+    const t = useAppStore.getState().tour;
+    expect(t.shape).toBe("1d");
+    expect(t.activePanelId).toBe(dotplotId);
+    expect(t.basis).toBeNull();
+    expect(t.proj).toBeNull();
+  });
+
+  it("setTourShape without compatible panel keeps activePanelId", () => {
+    const scatterId = useAppStore.getState().addScatter("x", "y");
+    useAppStore.getState().startTour(scatterId, "2d", ["x", "y"]);
+    useAppStore.getState().setTourShape("1d");
+    const t = useAppStore.getState().tour;
+    expect(t.shape).toBe("1d");
+    expect(t.activePanelId).toBe(scatterId);
+  });
+
+  it("setTourShape when idle just updates shape", () => {
+    useAppStore.getState().setTourShape("1d");
+    expect(useAppStore.getState().tour.shape).toBe("1d");
+    expect(useAppStore.getState().tour.activePanelId).toBeNull();
   });
 });

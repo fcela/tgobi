@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { AppStore, TourSlice, SavedView, TourShape } from "@/store/types";
+import type { AppStore, TourSlice, SavedView, TourShape, TourMode, TourKeyframe } from "@/store/types";
 
 const DEFAULT_SPEED = 1200;
 
@@ -21,32 +21,62 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
     t: 0,
     savedViews: [],
     nextViewId: 1,
+    keyframes: [],
+    nextKeyframeId: 1,
+    scrubberT: 0,
+    scrubbing: false,
+    langevinStep: 0.05,
+    langevinDiffusion: 1.0,
+    ppScoreTrace: [],
+    ppClassSource: "paint",
   },
 
   startTour: (panelId, shape, vars) =>
     set((s) => ({
       tour: { ...s.tour, activePanelId: panelId, shape, activeVars: vars,
-        frozenVars: [], manualVar: null, manualValue: 0, isPlaying: true, basis: null, proj: null, ppValue: null, t: 0 },
+        frozenVars: [], manualVar: null, manualValue: 0, isPlaying: true, basis: null, proj: null, ppValue: null, t: 0,
+        keyframes: [], scrubberT: 0, scrubbing: false, ppScoreTrace: [] },
     })),
 
   pauseTour: () => set((s) => ({ tour: { ...s.tour, isPlaying: false } })),
   resumeTour: () => set((s) => ({ tour: { ...s.tour, isPlaying: true } })),
 
-stopTour: () =>
-  set((s) => ({
-    tour: { ...s.tour, activePanelId: null, isPlaying: false,
-      frozenVars: [], manualVar: null, manualValue: 0, basis: null, proj: null, ppValue: null, t: 0 },
-  })),
+  stopTour: () =>
+    set((s) => ({
+      tour: { ...s.tour, activePanelId: null, isPlaying: false,
+        frozenVars: [], manualVar: null, manualValue: 0, basis: null, proj: null, ppValue: null, t: 0,
+        keyframes: [], scrubberT: 0, scrubbing: false, ppScoreTrace: [] },
+    })),
 
   setTourSpeed: (speed) => set((s) => ({ tour: { ...s.tour, speed } })),
-  setTourShape: (shape: TourShape) => set((s) => ({ tour: { ...s.tour, shape } })),
-  setTourMode: (mode: "grand" | "pp" | "manual") => set((s) => {
-    if (mode !== "manual") {
-      return { tour: { ...s.tour, mode, ppValue: null, frozenVars: [], manualVar: null, manualValue: 0 } };
-    }
-    return { tour: { ...s.tour, mode, ppValue: null } };
+  setTourShape: (shape: TourShape) => set((s) => {
+    if (s.tour.activePanelId == null) return { tour: { ...s.tour, shape } };
+    const want = shape === "2d" ? "scatter" : "dotplot";
+    const compatible = s.plots.panels.find((p) => p.kind === want);
+    if (!compatible) return { tour: { ...s.tour, shape } };
+    return {
+      tour: {
+        ...s.tour,
+        shape,
+        activePanelId: compatible.id,
+        basis: null,
+        proj: null,
+        ppValue: null,
+        t: 0,
+        ppScoreTrace: [],
+      },
+    };
   }),
-  setTourPpIndex: (ppIndex) => set((s) => ({ tour: { ...s.tour, ppIndex, ppValue: null } })),
+  setTourMode: (mode: TourMode) => set((s) => {
+    if (mode === "guided" || mode === "langevin") {
+      return { tour: { ...s.tour, mode, ppValue: null, frozenVars: [], manualVar: null, manualValue: 0, ppScoreTrace: [] } };
+    }
+    if (mode !== "manual") {
+      return { tour: { ...s.tour, mode, ppValue: null, frozenVars: [], manualVar: null, manualValue: 0, ppScoreTrace: [] } };
+    }
+    return { tour: { ...s.tour, mode, ppValue: null, ppScoreTrace: [] } };
+  }),
+  setTourPpIndex: (ppIndex) => set((s) => ({ tour: { ...s.tour, ppIndex, ppValue: null, ppScoreTrace: [] } })),
   setTourActiveVars: (vars) => set((s) => {
     const manualVar = s.tour.manualVar && vars.includes(s.tour.manualVar) ? s.tour.manualVar : null;
     return {
@@ -76,7 +106,12 @@ stopTour: () =>
   }),
 
   setTourFrame: (basis, proj, t, ppValue) =>
-    set((s) => ({ tour: { ...s.tour, basis, proj, t, ppValue: ppValue === undefined ? s.tour.ppValue : ppValue } })),
+    set((s) => {
+      const nextTrace = ppValue != null
+        ? [...s.tour.ppScoreTrace, ppValue].slice(-100)
+        : s.tour.ppScoreTrace;
+      return { tour: { ...s.tour, basis, proj, t, ppValue: ppValue === undefined ? s.tour.ppValue : ppValue, ppScoreTrace: nextTrace } };
+    }),
 
   saveCurrentView: (name) => {
     const t = get().tour;
@@ -118,7 +153,43 @@ stopTour: () =>
   },
 
   removeView: (id) =>
+  set((s) => ({
+    tour: { ...s.tour, savedViews: s.tour.savedViews.filter((v) => v.id !== id) },
+  })),
+
+  addKeyframe: (basis, source, name) => {
+    const t = get().tour;
+    const id = t.nextKeyframeId;
+    const kf: TourKeyframe = {
+      id,
+      basis: new Float64Array(basis),
+      source,
+      name: name ?? `KF ${id}`,
+    };
     set((s) => ({
-      tour: { ...s.tour, savedViews: s.tour.savedViews.filter((v) => v.id !== id) },
-    })),
+      tour: { ...s.tour, keyframes: [...s.tour.keyframes, kf], nextKeyframeId: id + 1 },
+    }));
+    return id;
+  },
+
+  removeKeyframe: (id) =>
+  set((s) => ({
+    tour: { ...s.tour, keyframes: s.tour.keyframes.filter((kf) => kf.id !== id) },
+  })),
+
+  clearKeyframes: () => set((s) => ({ tour: { ...s.tour, keyframes: [] } })),
+
+  setScrubberT: (t) => set((s) => ({ tour: { ...s.tour, scrubberT: t } })),
+
+  setScrubbing: (scrubbing) => set((s) => ({ tour: { ...s.tour, scrubbing } })),
+
+  addSavedViewAsKeyframe: (viewId) => {
+    const v = get().tour.savedViews.find((x) => x.id === viewId);
+    if (!v) return;
+    get().addKeyframe(v.basis, "saved", v.name);
+  },
+
+  setLangevinStep: (step) => set((s) => ({ tour: { ...s.tour, langevinStep: step } })),
+  setLangevinDiffusion: (diffusion) => set((s) => ({ tour: { ...s.tour, langevinDiffusion: diffusion } })),
+  setPpClassSource: (source) => set((s) => ({ tour: { ...s.tour, ppClassSource: source, ppScoreTrace: [] } })),
 });

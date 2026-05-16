@@ -59,6 +59,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
+    "delaunator": "^5.1.0",
     "density-clustering": "^1.3.0",
     "ml-hclust": "^4.0.0",
     "ml-kmeans": "^7.0.0",

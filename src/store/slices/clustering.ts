@@ -5,7 +5,10 @@ import { kMeans } from "@/lib/clustering/kmeans";
 import { agglomerative } from "@/lib/clustering/hierarchical";
 import { dbscan } from "@/lib/clustering/dbscan";
 import { optics } from "@/lib/clustering/optics";
+import type { OpticsResult } from "@/lib/clustering/optics";
 import { xMeans } from "@/lib/clustering/xmeans";
+import { silhouette } from "@/lib/clustering/silhouette";
+import { kDistance } from "@/lib/clustering/kdistance";
 
 export const createClusteringSlice: StateCreator<AppStore, [], [], ClusteringSlice> = (set, get) => ({
   clustering: {
@@ -22,31 +25,36 @@ export const createClusteringSlice: StateCreator<AppStore, [], [], ClusteringSli
     running: false,
     error: null,
     dendrogram: null,
+    reachability: null,
+    ordering: null,
+    silhouetteMean: null,
+    silhouettePerCluster: null,
+    kDistancePlot: null,
   },
 
   setClusteringMethod: (method: ClusteringMethod) =>
-    set((s) => ({ clustering: { ...s.clustering, method, results: null, sizes: [], error: null, dendrogram: null } })),
+    set((s) => ({ clustering: { ...s.clustering, method, results: null, sizes: [], error: null, dendrogram: null, reachability: null, ordering: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   setClusteringVariables: (variables: string[]) =>
-    set((s) => ({ clustering: { ...s.clustering, variables, results: null, sizes: [], error: null, dendrogram: null } })),
+    set((s) => ({ clustering: { ...s.clustering, variables, results: null, sizes: [], error: null, dendrogram: null, reachability: null, ordering: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   setClusteringK: (k: number) =>
-    set((s) => ({ clustering: { ...s.clustering, k, results: null, sizes: [], error: null, dendrogram: null } })),
+    set((s) => ({ clustering: { ...s.clustering, k, results: null, sizes: [], error: null, dendrogram: null, reachability: null, ordering: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   setClusteringLinkage: (linkage: Linkage) =>
-    set((s) => ({ clustering: { ...s.clustering, linkage, results: null, sizes: [], error: null, dendrogram: null } })),
+    set((s) => ({ clustering: { ...s.clustering, linkage, results: null, sizes: [], error: null, dendrogram: null, reachability: null, ordering: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   setClusteringEps: (eps: number) =>
-    set((s) => ({ clustering: { ...s.clustering, eps, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, eps, results: null, sizes: [], error: null, reachability: null, ordering: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   setClusteringMinPts: (minPts: number) =>
-    set((s) => ({ clustering: { ...s.clustering, minPts, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, minPts, results: null, sizes: [], error: null, reachability: null, ordering: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   setClusteringXi: (xi: number) =>
-    set((s) => ({ clustering: { ...s.clustering, xi, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, xi, results: null, sizes: [], error: null, reachability: null, ordering: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   setClusteringKMax: (kMax: number) =>
-    set((s) => ({ clustering: { ...s.clustering, kMax, results: null, sizes: [], error: null } })),
+    set((s) => ({ clustering: { ...s.clustering, kMax, results: null, sizes: [], error: null, silhouetteMean: null, silhouettePerCluster: null, kDistancePlot: null } })),
 
   runClustering: () => {
     const { df } = get();
@@ -92,19 +100,47 @@ export const createClusteringSlice: StateCreator<AppStore, [], [], ClusteringSli
       ? optics(data, eps, minPts, xi)
       : xMeans(data, kMax);
 
-    const effectiveK = method === "xmeans" ? (result as ReturnType<typeof xMeans>).k : result.k;
-    const dendrogram = method === "hierarchical" ? (result as ReturnType<typeof agglomerative>).dendrogram ?? null : null;
+  const effectiveK = method === "xmeans" ? (result as ReturnType<typeof xMeans>).k : result.k;
+  const dendrogram = method === "hierarchical" ? (result as ReturnType<typeof agglomerative>).dendrogram ?? null : null;
+  const reachability = method === "optics" ? (result as OpticsResult).reachability ?? null : null;
+  const ordering = method === "optics" ? (result as OpticsResult).ordering ?? null : null;
 
-    set((s) => ({
-      clustering: {
-        ...s.clustering,
-        results: result.assignments,
-        k: effectiveK,
-        sizes: result.sizes,
-        running: false,
-        dendrogram,
-      },
-    }));
+  const cleanData: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const row = data[i]!;
+    if (row.every((v) => v != null && Number.isFinite(v))) {
+      cleanData.push(row as number[]);
+    }
+  }
+
+  let silhouetteMean: number | null = null;
+  let silhouettePerCluster: { id: number; mean: number; size: number }[] | null = null;
+  if (effectiveK >= 2 && cleanData.length > 0) {
+    const sil = silhouette(cleanData, result);
+    silhouetteMean = sil.mean;
+    silhouettePerCluster = sil.perCluster;
+  }
+
+  let kDistancePlot: Float64Array | null = null;
+  if ((method === "dbscan" || method === "optics") && cleanData.length > 0) {
+    kDistancePlot = kDistance(cleanData, minPts);
+  }
+
+  set((s) => ({
+    clustering: {
+      ...s.clustering,
+      results: result.assignments,
+      k: effectiveK,
+      sizes: result.sizes,
+      running: false,
+      dendrogram,
+      reachability,
+      ordering,
+      silhouetteMean,
+      silhouettePerCluster,
+      kDistancePlot,
+    },
+  }));
     } catch (e) {
       set((s) => ({
         clustering: {
@@ -147,8 +183,13 @@ export const createClusteringSlice: StateCreator<AppStore, [], [], ClusteringSli
         results: null,
         sizes: [],
         running: false,
-        error: null,
-        dendrogram: null,
-      },
+  error: null,
+    dendrogram: null,
+    reachability: null,
+    ordering: null,
+    silhouetteMean: null,
+    silhouettePerCluster: null,
+    kDistancePlot: null,
+  },
     })),
 });

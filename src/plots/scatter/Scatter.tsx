@@ -4,7 +4,6 @@ import { Regl2DScatterRenderer } from "@/plots/scatter/regl2dRenderer";
 import type { ScatterPanel } from "@/store/types";
 import type {
   BiplotOverlay,
-  ContourOverlay,
   DensityOverlay,
   HullOverlay,
   LoessOverlay,
@@ -142,24 +141,6 @@ export function Scatter({ panel }: ScatterProps) {
   }, [df, colorState.encoding, colorState.palette]);
 
   const paintPalette = useMemo(() => getPalette(colorState.palette), [colorState.palette]);
-
-  const contourOverlay = useMemo((): ContourOverlay | null => {
-    const { boundaryPaint, boundaryGrid, gridSize, boundaryMins, boundaryMaxs, variables } = classification;
-    if (!boundaryPaint || !boundaryGrid || gridSize === 0 || !boundaryMins || !boundaryMaxs) return null;
-    if (variables.length < 2) return null;
-    if (variables[0] !== panel.x || variables[1] !== panel.y) return null;
-    if (isTourActive) return null;
-    return {
-      grid: boundaryGrid,
-      paint: boundaryPaint,
-      resolution: classification.gridResolution,
-      nVars: variables.length,
-      mins: boundaryMins,
-      maxs: boundaryMaxs,
-      paintPalette,
-      alpha: 0.18,
-    };
-  }, [classification.boundaryPaint, classification.boundaryGrid, classification.gridSize, classification.boundaryMins, classification.boundaryMaxs, classification.gridResolution, classification.variables, panel.x, panel.y, paintPalette, isTourActive]);
 
   const densityOverlay = useMemo((): DensityOverlay | null => {
     if (!showDensity || isTourActive || !xCol || !yCol || !xScaled || !yScaled) return null;
@@ -303,23 +284,20 @@ export function Scatter({ panel }: ScatterProps) {
   useEffect(() => {
   const canvas = canvasRef.current;
   if (!canvas) return;
-  console.info("[scatter] mount renderer, panel=", panel.id);
-  try {
-  const r = new Regl2DScatterRenderer();
-  r.attach(canvas);
-  console.info("[scatter] WebGL renderer active");
-  rendererRef.current = r;
-  } catch (e) {
-  console.warn("[scatter] WebGL not supported, falling back to Canvas2D.", e);
-  const r = new Canvas2DScatterRenderer();
-  r.attach(canvas);
-  rendererRef.current = r;
-  }
-  return () => {
-  console.info("[scatter] unmount renderer, panel=", panel.id);
-  rendererRef.current?.detach();
-  rendererRef.current = null;
-  };
+    try {
+      const r = new Regl2DScatterRenderer();
+      r.attach(canvas);
+      rendererRef.current = r;
+    } catch (e) {
+      console.warn("[scatter] WebGL not supported, falling back to Canvas2D.", e);
+      const r = new Canvas2DScatterRenderer();
+      r.attach(canvas);
+      rendererRef.current = r;
+    }
+    return () => {
+      rendererRef.current?.detach();
+      rendererRef.current = null;
+    };
   }, []);
 
   // Resize observer keeps the canvas backing-store sized to the layout.
@@ -328,15 +306,14 @@ export function Scatter({ panel }: ScatterProps) {
   const canvas = canvasRef.current;
   if (!body || !canvas) return;
   let lastW = 0, lastH = 0;
-  const ro = new ResizeObserver((entries) => {
-  const r = rendererRef.current;
-  if (!r) { console.warn("[scatter] RO fired but no renderer, panel=", panel.id); return; }
-  for (const entry of entries) {
-  const w = Math.max(1, Math.floor(entry.contentBoxSize[0]?.inlineSize ?? entry.contentRect.width));
-  const h = Math.max(1, Math.floor(entry.contentBoxSize[0]?.blockSize ?? entry.contentRect.height));
-  if (w === lastW && h === lastH) return;
-  lastW = w; lastH = h;
-  console.info("[scatter] resize, panel=", panel.id, "w=", w, "h=", h);
+    const ro = new ResizeObserver((entries) => {
+      const r = rendererRef.current;
+      if (!r) return;
+      for (const entry of entries) {
+        const w = Math.max(1, Math.floor(entry.contentBoxSize[0]?.inlineSize ?? entry.contentRect.width));
+        const h = Math.max(1, Math.floor(entry.contentBoxSize[0]?.blockSize ?? entry.contentRect.height));
+        if (w === lastW && h === lastH) return;
+        lastW = w; lastH = h;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
@@ -434,7 +411,7 @@ export function Scatter({ panel }: ScatterProps) {
     ? { tool: brush.tool, rect: brush.activeRect, path: brush.activePath }
     : null;
   const hullOverlay = buildHullOverlay(r.transform());
-    r.draw(visual, isThisPanelBrushing, edgeOverlay, hullOverlay, contourOverlay, densityOverlay, biplotOverlay, rugOverlay, loessOverlay);
+    r.draw(visual, isThisPanelBrushing, edgeOverlay, hullOverlay, densityOverlay, biplotOverlay, rugOverlay, loessOverlay);
     updatePinnedLabels(r);
 
     // Build kd-tree from current pixel positions if missing.
@@ -495,7 +472,7 @@ export function Scatter({ panel }: ScatterProps) {
   hullCacheRef.current = null;
   requestPaint();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, pointSize, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding, classification.boundaryPaint, classification.gridSize, showDensity, showRug, showLoess]);
+  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, pointSize, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding, classification.boundaryPaint, classification.gridSize, classification.boundaryProbabilities, classification.boundariesVisible, showDensity, showRug, showLoess]);
 
   // Mouse interactions.
   const dragRef = useRef<{

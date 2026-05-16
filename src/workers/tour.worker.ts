@@ -2,33 +2,39 @@ import { makeMat } from "@/lib/linalg/types";
 import type { Mat } from "@/lib/linalg/types";
 import { multiply } from "@/lib/linalg/matmul";
 import { randomBasis, mulberry32 } from "@/lib/linalg/random";
+import { gramSchmidt } from "@/lib/linalg/qr";
 import { tourPath } from "@/lib/linalg/geodesic";
 import { applyFrozenRowsPure } from "@/lib/linalg/frozen";
 import { projectionPursuitTarget } from "@/lib/tour-pp/optimizer";
 import { projectionPursuitValueForProjection } from "@/lib/tour-pp/indices";
 import type { ProjectionPursuitIndex } from "@/lib/tour-pp/indices";
+import { buildKeyframeSpline, arcLengthToU } from "@/lib/linalg/catmullRom";
+import type { KeyframeSpline } from "@/lib/linalg/catmullRom";
 
 type InMessage =
   | {
-      kind: "init";
-      X: Float64Array;
-      n: number;
-      p: number;
-      k: 1 | 2;
-      speed: number;
-      seed: number;
-  mode: "grand" | "pp" | "manual";
-  ppIndex: ProjectionPursuitIndex;
-  classLabels: Int32Array | null;
-  frozenRows: Uint8Array;
-}
+    kind: "init";
+    X: Float64Array;
+    n: number;
+    p: number;
+    k: 1 | 2;
+    speed: number;
+    seed: number;
+    mode: "grand" | "pp" | "manual" | "guided" | "langevin";
+    ppIndex: ProjectionPursuitIndex;
+    classLabels: Int32Array | null;
+    frozenRows: Uint8Array;
+  }
   | { kind: "play" }
   | { kind: "pause" }
-  | { kind: "setMode"; mode: "grand" | "pp" | "manual"; ppIndex: ProjectionPursuitIndex; classLabels: Int32Array | null }
+  | { kind: "setMode"; mode: "grand" | "pp" | "manual" | "guided" | "langevin"; ppIndex: ProjectionPursuitIndex; classLabels: Int32Array | null }
   | { kind: "setSpeed"; speed: number }
   | { kind: "setFrozenRows"; frozenRows: Uint8Array }
   | { kind: "setManualValue"; varIndex: number; value: number }
   | { kind: "setBasis"; basis: Float64Array }
+  | { kind: "setKeyframes"; keyframes: Float64Array[] }
+  | { kind: "setScrubberT"; t: number }
+  | { kind: "setLangevinParams"; step: number; diffusion: number }
   | { kind: "stop" };
 
 type OutMessage = { kind: "frame"; basis: Float64Array; proj: Float64Array; t: number; ppValue: number | null };
@@ -36,7 +42,7 @@ type OutMessage = { kind: "frame"; basis: Float64Array; proj: Float64Array; t: n
 let X: Mat | null = null;
 let n = 0, p = 0, k: 1 | 2 = 2;
 let speed = 1200;
-let mode: "grand" | "pp" | "manual" = "grand";
+let mode: "grand" | "pp" | "manual" | "guided" | "langevin" = "grand";
 let ppIndex: ProjectionPursuitIndex = "holes";
 let classLabels: Int32Array | null = null;
 let rng = mulberry32(1);
@@ -49,6 +55,14 @@ let frozenValues: Float64Array | null = null;
 let t = 0;
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
+
+let keyframeSpline: KeyframeSpline | null = null;
+let guidedU = 0;
+let guidedDirection: 1 | -1 = 1;
+let scrubberT = -1;
+
+let langevinStep = 0.05;
+let langevinDiffusion = 1.0;
 
 const GRAND_TARGET_FRACTION = 0.6;
 const TIMER_MS = 16;
@@ -69,7 +83,19 @@ function newTarget(start?: Mat): void {
 }
 
 function tick(): void {
-  if (!running || !X || !path || !curr || !target) return;
+  if (!running || !X) return;
+
+  if (mode === "guided" && keyframeSpline && keyframeSpline.numKeyframes >= 2) {
+    tickGuided();
+    return;
+  }
+
+  if (mode === "langevin") {
+    tickLangevin();
+    return;
+  }
+
+  if (!path || !curr || !target) return;
   t += 1 / Math.max(1, speed);
   if (t >= 1) {
     newTarget(currentFrame ?? path(1));
@@ -80,7 +106,27 @@ function tick(): void {
   const ppValue = mode === "pp" ? projectionPursuitValueForProjection(makeMat(n, k, proj), ppIndex, classLabels) : null;
   const basisCopy = new Float64Array(B.values);
   const msg: OutMessage = { kind: "frame", basis: basisCopy, proj, t, ppValue };
-  // proj is transferable — saves a copy on the way out
+  (self as unknown as Worker).postMessage(msg, [proj.buffer]);
+}
+
+function tickGuided(): void {
+  if (!keyframeSpline || !X) return;
+
+  if (scrubberT >= 0) {
+    guidedU = scrubberT;
+    scrubberT = -1;
+  } else {
+    guidedU += guidedDirection * (1 / Math.max(1, speed)) / keyframeSpline.totalArcLength;
+    if (guidedU >= 1) { guidedU = 1; guidedDirection = -1; }
+    if (guidedU <= 0) { guidedU = 0; guidedDirection = 1; }
+  }
+
+  const B = keyframeSpline.eval(guidedU);
+  currentFrame = B;
+  curr = B;
+  const proj = multiply(X, B).values;
+  const basisCopy = new Float64Array(B.values);
+  const msg: OutMessage = { kind: "frame", basis: basisCopy, proj, t: guidedU, ppValue: null };
   (self as unknown as Worker).postMessage(msg, [proj.buffer]);
 }
 
@@ -93,6 +139,12 @@ function stopTimer(): void {
   if (timer == null) return;
   clearInterval(timer);
   timer = null;
+}
+
+function rebuildSpline(kfBases: Float64Array[]): void {
+  if (kfBases.length < 2) { keyframeSpline = null; return; }
+  const mats = kfBases.map((b) => makeMat(p, k, new Float64Array(b)));
+  keyframeSpline = buildKeyframeSpline(mats);
 }
 
 self.onmessage = (e: MessageEvent<InMessage>) => {
@@ -126,15 +178,22 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
     case "setSpeed":
       speed = msg.speed;
       break;
-    case "setMode": {
-      const nextClassLabels = msg.classLabels ? new Int32Array(msg.classLabels) : null;
-      const changed = mode !== msg.mode || ppIndex !== msg.ppIndex || !sameLabels(classLabels, nextClassLabels);
-      mode = msg.mode;
-      ppIndex = msg.ppIndex;
-      classLabels = nextClassLabels;
-      if (changed) newTarget(currentFrame ?? curr ?? undefined);
-      break;
+  case "setMode": {
+    const nextClassLabels = msg.classLabels ? new Int32Array(msg.classLabels) : null;
+    const changed = mode !== msg.mode || ppIndex !== msg.ppIndex || !sameLabels(classLabels, nextClassLabels);
+    mode = msg.mode;
+    ppIndex = msg.ppIndex;
+    classLabels = nextClassLabels;
+    if (mode === "guided") {
+      guidedU = 0;
+      guidedDirection = 1;
+    } else if (mode === "langevin") {
+      t = 0;
+    } else if (changed) {
+      newTarget(currentFrame ?? curr ?? undefined);
     }
+    break;
+  }
     case "setFrozenRows":
       updateFrozenRows(msg.frozenRows, true);
       break;
@@ -177,11 +236,33 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
       recaptureFrozenValues();
       newTarget();
       break;
-    case "stop":
+    case "setKeyframes":
+      rebuildSpline(msg.keyframes);
+      if (mode === "guided" && keyframeSpline) {
+        guidedU = 0;
+        guidedDirection = 1;
+      }
+      break;
+  case "setScrubberT":
+    if (mode === "guided") {
+      scrubberT = Math.max(0, Math.min(1, msg.t));
+      if (!running) {
+        running = true;
+        startTimer();
+        setTimeout(() => { running = false; stopTimer(); }, 50);
+      }
+    }
+    break;
+  case "setLangevinParams":
+    langevinStep = msg.step;
+    langevinDiffusion = msg.diffusion;
+    break;
+  case "stop":
       running = false;
       stopTimer();
       X = null; classLabels = null; curr = null; currentFrame = null; target = null; path = null;
       frozenRows = new Uint8Array(0); frozenValues = null; t = 0;
+      keyframeSpline = null; guidedU = 0; guidedDirection = 1; scrubberT = -1;
       break;
   }
 };
@@ -242,6 +323,70 @@ function hasFrozenRows(): boolean {
 function easeProgress(x: number): number {
   const t0 = Math.max(0, Math.min(1, x));
   return t0 * t0 * t0 * (t0 * (t0 * 6 - 15) + 10);
+}
+
+function gauss(rng: () => number): number {
+  let u = 0, v = 0;
+  while (u === 0) u = rng();
+  while (v === 0) v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function tickLangevin(): void {
+  if (!X || !curr) return;
+  const p = curr.nrow;
+  const k = curr.ncol;
+  const dt = langevinStep;
+  const T = langevinDiffusion;
+
+  const noise = new Float64Array(p * k);
+  for (let i = 0; i < p * k; i++) {
+    noise[i] = gauss(rng);
+  }
+
+  const CtN = new Float64Array(k * k);
+  for (let i = 0; i < k; i++) {
+    for (let j = 0; j < k; j++) {
+      let s = 0;
+      for (let r = 0; r < p; r++) {
+        s += curr.values[r * k + i]! * noise[r * k + j]!;
+      }
+      CtN[i * k + j] = s;
+    }
+  }
+
+  const tangent = new Float64Array(p * k);
+  for (let r = 0; r < p; r++) {
+    for (let c = 0; c < k; c++) {
+      let val = noise[r * k + c]!;
+      for (let j = 0; j < k; j++) {
+        val -= curr.values[r * k + j]! * CtN[j * k + c]!;
+      }
+      tangent[r * k + c] = val;
+    }
+  }
+
+  const scale = Math.sqrt(dt * 2 * T);
+  const next = new Float64Array(p * k);
+  for (let i = 0; i < p * k; i++) {
+    next[i] = curr.values[i]! + scale * tangent[i]!;
+  }
+
+  let B_new: Mat;
+  try {
+    B_new = gramSchmidt(makeMat(p, k, next));
+  } catch {
+    return;
+  }
+
+  B_new = applyFrozenRows(B_new);
+  currentFrame = B_new;
+  curr = B_new;
+  t += 1 / Math.max(1, speed);
+  const proj = multiply(X, B_new).values;
+  const basisCopy = new Float64Array(B_new.values);
+  const msg: OutMessage = { kind: "frame", basis: basisCopy, proj, t, ppValue: null };
+  (self as unknown as Worker).postMessage(msg, [proj.buffer]);
 }
 
 function sameLabels(a: Int32Array | null, b: Int32Array | null): boolean {

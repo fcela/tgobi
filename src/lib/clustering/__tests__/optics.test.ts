@@ -34,4 +34,26 @@ describe("optics", () => {
     const r = optics(data, 5, 2, 0.05);
     expect(r.ordering.length).toBeGreaterThan(0);
   });
+
+  it("returns reachability array", () => {
+    const data: (number | null)[][] = [];
+    for (let i = 0; i < 5; i++) data.push([0, 0]);
+    for (let i = 0; i < 5; i++) data.push([100, 100]);
+    const r = optics(data, 5, 2, 0.05);
+    expect(r.reachability.length).toBe(10);
+  });
+
+  it("assigns different cluster ids to well-separated groups", () => {
+    const data: (number | null)[][] = [];
+    for (let i = 0; i < 10; i++) data.push([0, 0]);
+    for (let i = 0; i < 10; i++) data.push([50, 50]);
+    for (let i = 0; i < 10; i++) data.push([100, 100]);
+    const r = optics(data, 5, 2, 0.05);
+    expect(r.k).toBeGreaterThanOrEqual(2);
+    const ids = new Set<number>();
+    for (let i = 0; i < r.assignments.length; i++) {
+      if (r.assignments[i]! >= 0) ids.add(r.assignments[i]!);
+    }
+    expect(ids.size).toBeGreaterThanOrEqual(2);
+  });
 });

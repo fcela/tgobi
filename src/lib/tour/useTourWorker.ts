@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store";
 import { toStandardisedMatrix } from "@/lib/tour/standardize";
 import { bitGet } from "@/lib/brush/hitTest";
+import type { DataFrame } from "@/lib/data/types";
 
 // Vite worker import — resolved at build time (see src/workers/worker-types.d.ts):
 import TourWorker from "@/workers/tour.worker.ts?worker";
@@ -23,7 +24,7 @@ export function useTourWorker(): void {
 
   // Spin up / tear down the worker as `activePanelId` toggles.
   useEffect(() => {
-    if (tour.activePanelId == null || !df || tour.activeVars.length < (tour.shape === "2d" ? 2 : 1)) {
+    if (tour.activePanelId == null || !df || tour.activeVars.length < 2) {
       // ensure no worker around
       if (workerRef.current) { workerRef.current.terminate(); workerRef.current = null; }
       return;
@@ -38,7 +39,7 @@ export function useTourWorker(): void {
     };
 
     const X = toStandardisedMatrix(df, tour.activeVars, shadow, spec);
-    const classLabels = buildClassLabelsFromPaint(paint, shadow, df.nrow);
+    const classLabels = buildClassLabels(tour.ppClassSource, paint, shadow, df);
     const k = tour.shape === "1d" ? 1 : 2;
     worker.postMessage(
       {
@@ -55,6 +56,11 @@ export function useTourWorker(): void {
         frozenRows: buildFrozenRows(tour.activeVars, tour.frozenVars),
       },
     );
+
+    // Send keyframes if in guided mode
+    if (tour.mode === "guided" && tour.keyframes.length >= 2) {
+      worker.postMessage({ kind: "setKeyframes", keyframes: tour.keyframes.map((kf) => kf.basis) });
+    }
 
     return () => {
       worker.postMessage({ kind: "stop" });
@@ -102,7 +108,7 @@ export function useTourWorker(): void {
   useEffect(() => {
     const w = workerRef.current;
     if (!w) return;
-    const classLabels = buildClassLabelsFromPaint(paint, shadow, df?.nrow ?? 0);
+    const classLabels = buildClassLabels(tour.ppClassSource, paint, shadow, df);
     w.postMessage({ kind: "setMode", mode: tour.mode, ppIndex: tour.ppIndex, classLabels });
   }, [df, shadow, paint, tour.mode, tour.ppIndex]);
 
@@ -114,6 +120,27 @@ export function useTourWorker(): void {
       w.postMessage({ kind: "setBasis", basis: new Float64Array(tour.basis) });
     }
   }, [tour.basis, tour.t, tour.isPlaying]);
+
+  // Sync keyframes to worker when in guided mode
+  useEffect(() => {
+    const w = workerRef.current;
+    if (!w || tour.mode !== "guided") return;
+    w.postMessage({ kind: "setKeyframes", keyframes: tour.keyframes.map((kf) => kf.basis) });
+  }, [tour.mode, tour.keyframes]);
+
+  // Sync scrubber position to worker
+  useEffect(() => {
+    const w = workerRef.current;
+    if (!w || !tour.scrubbing || tour.mode !== "guided") return;
+    w.postMessage({ kind: "setScrubberT", t: tour.scrubberT });
+  }, [tour.scrubbing, tour.scrubberT, tour.mode]);
+
+  // Langevin parameters
+  useEffect(() => {
+    const w = workerRef.current;
+    if (!w) return;
+    w.postMessage({ kind: "setLangevinParams", step: tour.langevinStep, diffusion: tour.langevinDiffusion });
+  }, [tour.langevinStep, tour.langevinDiffusion]);
 }
 
 function buildFrozenRows(activeVars: ReadonlyArray<string>, frozenVars: ReadonlyArray<string>): Uint8Array {
@@ -123,6 +150,29 @@ function buildFrozenRows(activeVars: ReadonlyArray<string>, frozenVars: Readonly
     rows[i] = frozen.has(activeVars[i]!) ? 1 : 0;
   }
   return rows;
+}
+
+function buildClassLabels(ppClassSource: "paint" | string, paint: Uint8Array, shadow: Uint8Array, df: DataFrame | null): Int32Array | null {
+  if (ppClassSource !== "paint" && df) {
+    const col = df.column(ppClassSource);
+    if (col && col.type === "categorical") {
+      const catCol = col as Extract<typeof col, { type: "categorical" }>;
+      const n = df.nrow;
+      const labels = new Int32Array(n).fill(-1);
+      const catToClass = new Map<string, number>();
+      for (let i = 0; i < n; i++) {
+        if (bitGet(shadow, i)) continue;
+        const code = catCol.codes[i]!;
+        if (code < 0) continue;
+        const name = catCol.levels[code]!;
+        let cls = catToClass.get(name);
+        if (cls === undefined) { cls = catToClass.size; catToClass.set(name, cls); }
+        labels[i] = cls;
+      }
+      return catToClass.size >= 2 ? labels : null;
+    }
+  }
+  return buildClassLabelsFromPaint(paint, shadow, df?.nrow ?? 0);
 }
 
 function buildClassLabelsFromPaint(paint: Uint8Array, shadow: Uint8Array, nrow: number): Int32Array | null {

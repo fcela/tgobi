@@ -22,6 +22,7 @@ import {
   cellPixelPositions,
   type ScatmatLayout,
   type ScatmatEdgeOverlay,
+  type ScatmatScagHighlight,
   type VisualState,
 } from "@/plots/scatmat/scatmatRender";
 
@@ -48,6 +49,7 @@ export function Scatmat({ panel }: ScatmatProps) {
   const setIdentifyHover = useAppStore((s) => s.setIdentifyHover);
   const togglePinnedIdentify = useAppStore((s) => s.togglePinnedIdentify);
   const removePanel = useAppStore((s) => s.removePanel);
+  const scagnostics = useAppStore((s) => s.scagnostics);
 
   const cardRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -166,6 +168,25 @@ export function Scatmat({ panel }: ScatmatProps) {
     colorState.palette,
   ]);
 
+  const scagHighlight = useMemo<ScatmatScagHighlight | null>(() => {
+    if (!scagnostics.results) return null;
+    const vars = panel.variables;
+    const varsSet = new Set(vars);
+    const relevant = scagnostics.results.filter(
+      (r) => varsSet.has(r.xVar) && varsSet.has(r.yVar),
+    );
+    if (relevant.length === 0) return null;
+    const scores = new Map<string, number>();
+    for (const r of relevant) {
+      scores.set(`${r.xVar},${r.yVar}`, r.scores[scagnostics.filterMeasure]);
+    }
+    return {
+      measure: scagnostics.filterMeasure,
+      scores,
+      threshold: scagnostics.filterThreshold,
+    };
+  }, [scagnostics.results, scagnostics.filterMeasure, scagnostics.filterThreshold, panel.variables]);
+
   // Invalidate kd-tree cache when df or variables change
   useEffect(() => {
     treeCache.current.clear();
@@ -249,6 +270,9 @@ export function Scatmat({ panel }: ScatmatProps) {
           visual,
           isActiveCell ? activeBrushOverlay : null,
           edgeOverlay,
+          scagHighlight,
+          panel.variables[j],
+          panel.variables[i],
         );
 
         // Build kd-tree lazily
@@ -292,7 +316,7 @@ export function Scatmat({ panel }: ScatmatProps) {
   useEffect(() => {
     requestPaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, cols, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, edgeOverlay, alpha, pinnedRows, labelVar]);
+  }, [df, cols, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, edgeOverlay, alpha, pinnedRows, labelVar, scagHighlight]);
 
   // Track which cell the current drag started in
   const activeDragCell = useRef<{ i: number; j: number } | null>(null);
@@ -387,8 +411,29 @@ export function Scatmat({ panel }: ScatmatProps) {
       return;
     }
 
-    if (activeTool !== "brush") return;
-    if (!dragRef.current || !df || !activeDragCell.current) return;
+  if (activeTool !== "brush") return;
+  if (!dragRef.current || !df || !activeDragCell.current) {
+    if (scagHighlight && !dragRef.current) {
+      const hit = getCellFromPoint(x, y);
+      if (hit && hit.i !== hit.j) {
+        const xVar = panel.variables[hit.j]!;
+        const yVar = panel.variables[hit.i]!;
+        const key = `${xVar},${yVar}`;
+        const key2 = `${yVar},${xVar}`;
+        const score = scagHighlight.scores.get(key) ?? scagHighlight.scores.get(key2);
+        if (score != null) {
+          setTip({
+            text: `${scagHighlight.measure}: ${score.toFixed(3)}`,
+            px: x + 8,
+            py: y + 8,
+          });
+          return;
+        }
+      }
+      setTip(null);
+    }
+    return;
+  }
     const { i, j } = activeDragCell.current;
     const key = `${i},${j}`;
     const tree = treeCache.current.get(key);

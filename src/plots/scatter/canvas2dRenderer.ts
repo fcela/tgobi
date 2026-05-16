@@ -1,7 +1,6 @@
 import type {
   BiplotOverlay,
   BrushOverlay,
-  ContourOverlay,
   DensityOverlay,
   EdgeOverlay,
   HullOverlay,
@@ -51,6 +50,10 @@ function drawMarker(
     ctx.lineTo(x + s, y + s);
     ctx.moveTo(x + s, y - s);
     ctx.lineTo(x - s, y + s);
+    ctx.stroke();
+    return;
+  } else if (shape === 6) {
+    ctx.arc(x, y, r * 1.15, 0, Math.PI * 2);
     ctx.stroke();
     return;
   } else {
@@ -150,7 +153,6 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     activeBrush: BrushOverlay | null,
     edgeOverlay: EdgeOverlay | null = null,
     hullOverlay: HullOverlay | null = null,
-    contourOverlay: ContourOverlay | null = null,
     densityOverlay: DensityOverlay | null = null,
     biplotOverlay: BiplotOverlay | null = null,
     rugOverlay: RugOverlay | null = null,
@@ -175,7 +177,6 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
 
     drawEdges(ctx, edgeOverlay, t, x, y, xm, ym, visual.shadow);
     drawHullOverlay(ctx, hullOverlay);
-    drawContourOverlay(ctx, contourOverlay, t);
     drawDensityOverlay(ctx, densityOverlay, t);
     drawBiplotOverlay(ctx, biplotOverlay, t);
     drawRugOverlay(ctx, rugOverlay, t);
@@ -249,36 +250,6 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     // pass 4: active brush overlay
     drawBrushOverlay(ctx, activeBrush);
   }
-}
-
-function drawContourOverlay(
-  ctx: CanvasRenderingContext2D,
-  overlay: ContourOverlay | null,
-  t: ScatterTransform,
-): void {
-  if (!overlay || overlay.nVars < 2) return;
-  const { grid, paint, resolution, nVars, mins, maxs, paintPalette, alpha } = overlay;
-  const res = resolution;
-  const nGrid = paint.length;
-  ctx.globalAlpha = alpha;
-  for (let idx = 0; idx < nGrid; idx++) {
-    const paintIdx = paint[idx]!;
-    if (paintIdx <= 0) continue;
-    const color = paintPalette[paintIdx - 1];
-    if (!color) continue;
-    const xVal = grid[idx * nVars]!;
-    const yVal = grid[idx * nVars + 1]!;
-    const p = t.toPx(xVal, yVal);
-    const dx = nVars >= 1 ? (maxs[0]! - mins[0]!) / (res - 1) : 0;
-    const dy = nVars >= 2 ? (maxs[1]! - mins[1]!) / (res - 1) : 0;
-    const pR = t.toPx(xVal + dx / 2, yVal + dy / 2);
-    const pL = t.toPx(xVal - dx / 2, yVal - dy / 2);
-    const cellW = Math.abs(pR.x - pL.x);
-    const cellH = Math.abs(pR.y - pL.y);
-    ctx.fillStyle = color;
-    ctx.fillRect(p.x - cellW / 2, p.y - cellH / 2, cellW, cellH);
-  }
-  ctx.globalAlpha = 1;
 }
 
 function drawDensityOverlay(

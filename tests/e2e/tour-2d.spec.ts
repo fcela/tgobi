@@ -28,9 +28,11 @@ test("flea → 2D tour starts and runs without errors", async ({ page }) => {
   await page.getByLabel("projection pursuit goal").selectOption("pca");
   await expect(page.locator(".tour-panel .row").filter({ hasText: "Score" }).locator("small"))
     .toHaveText(/^\d+\.\d{3}$/);
+  // LDA now supports both painted groups and categorical variables
   await page.getByLabel("projection pursuit goal").selectOption("lda");
-  await expect(page.getByLabel("LDA class variable")).toBeVisible();
-  await page.getByLabel("LDA class variable").selectOption("species");
+  // The class source dropdown should appear; flea has a "species" categorical variable
+  await expect(page.getByLabel("LDA class source")).toBeVisible();
+  await page.getByLabel("LDA class source").selectOption("species");
   await expect(page.locator(".tour-panel .row").filter({ hasText: "Score" }).locator("small"))
     .toHaveText(/^\d+\.\d{3}$/);
 

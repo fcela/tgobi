@@ -79,11 +79,12 @@ describe("PlotsSlice", () => {
 
   it("addParcoords appends a parcoords panel with given variables", () => {
     const id = useAppStore.getState().addParcoords(["a", "b", "c"]);
-    expect(useAppStore.getState().plots.panels[0]).toEqual({
-      id,
-      kind: "parcoords",
-      variables: ["a", "b", "c"],
-    });
+  expect(useAppStore.getState().plots.panels[0]).toEqual({
+    id,
+    kind: "parcoords",
+    variables: ["a", "b", "c"],
+    condVar: null,
+  });
   });
 
   it("addParcoords throws if fewer than 2 variables", () => {

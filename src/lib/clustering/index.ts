@@ -6,3 +6,6 @@ export { dbscan } from "./dbscan";
 export { optics } from "./optics";
 export type { OpticsResult } from "./optics";
 export { xMeans } from "./xmeans";
+export { silhouette } from "./silhouette";
+export type { SilhouetteResult } from "./silhouette";
+export { kDistance } from "./kdistance";

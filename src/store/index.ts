@@ -14,6 +14,10 @@ import { createMissingSlice } from "@/store/slices/missing";
 import { createClusteringSlice } from "@/store/slices/clustering";
 import { createClassificationSlice } from "@/store/slices/classification";
 import { createProjectionSlice } from "@/store/slices/projection";
+import { createScagnosticsSlice } from "@/store/slices/scagnostics";
+import { createMapperSlice } from "@/store/slices/mapper";
+import { createLessonSlice } from "@/store/slices/lessons";
+import { createSessionSlice } from "@/store/slices/session";
 
 export const useAppStore = create<AppStore>()((...a) => ({
   ...createDataSlice(...a),
@@ -30,4 +34,8 @@ export const useAppStore = create<AppStore>()((...a) => ({
   ...createClusteringSlice(...a),
   ...createClassificationSlice(...a),
   ...createProjectionSlice(...a),
+  ...createScagnosticsSlice(...a),
+  ...createMapperSlice(...a),
+  ...createLessonSlice(...a),
+  ...createSessionSlice(...a),
 }));

@@ -38,7 +38,7 @@ describe("TourPanel", () => {
     expect(t.isPlaying).toBe(true);
   });
 
-  it("LDA is disabled without painted groups, enabled with paint", () => {
+  it("LDA class source: paint disabled without groups, categorical variable available", () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([1, 2, 3, 4])),
       makeNumericColumn("b", new Float64Array([4, 5, 6, 7])),
@@ -55,15 +55,16 @@ describe("TourPanel", () => {
     expect(ldaOption.disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText(/projection pursuit goal/i), { target: { value: "lda" } });
-    expect(screen.getByText(/brush to paint/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/lda class source/i)).toBeInTheDocument();
 
     act(() => {
       useAppStore.getState().setSelectionPaint(new Uint8Array([1, 1, 2, 2]));
     });
-    expect(screen.getByText(/using painted groups/i)).toBeInTheDocument();
+    const classSelect = screen.getByLabelText(/lda class source/i) as HTMLSelectElement;
+    expect(classSelect.value).toBe("paint");
   });
 
-  it("LDA start is disabled without painted groups", () => {
+  it("LDA start is disabled without paint or categorical variable", () => {
     const df = new ArrayDataFrame([
       makeNumericColumn("a", new Float64Array([1, 2, 3, 4])),
       makeNumericColumn("b", new Float64Array([4, 5, 6, 7])),

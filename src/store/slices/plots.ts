@@ -217,10 +217,116 @@ export const createPlotsSlice: StateCreator<AppStore, [], [], PlotsSlice> = (set
         ),
       },
     })),
-  addDotplot: (variable, bins = 20) => {
+  addBoxplot: (variable, groupVar = null) => {
     const id = get().plots.nextId;
-    const panel = { id, kind: "dotplot" as const, variable, bins };
+    const panel = { id, kind: "boxplot" as const, variable, groupVar };
     set((s) => {
+      let root = s.plots.root;
+      if (!root) {
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = leaf;
+      } else {
+        const existingRoot = root;
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = {
+          type: "split",
+          id: nextTileId(),
+          direction: "horizontal",
+          ratio: 0.5,
+          first: existingRoot,
+          second: leaf,
+        };
+      }
+      return {
+        plots: {
+          ...s.plots,
+          panels: [...s.plots.panels, panel],
+          nextId: id + 1,
+          root,
+        },
+      };
+    });
+    return id;
+  },
+  setBoxplotGroupVar: (id, groupVar) =>
+  set((s) => ({
+    plots: {
+      ...s.plots,
+      panels: s.plots.panels.map((panel) =>
+        panel.id === id && panel.kind === "boxplot"
+          ? { ...panel, groupVar }
+          : panel,
+      ),
+    },
+  })),
+  addAndrews: (variables, resolution = 200) => {
+    if (variables.length < 2) throw new Error("addAndrews: need at least 2 variables");
+    const id = get().plots.nextId;
+    const panel = { id, kind: "andrews" as const, variables, resolution };
+    set((s) => {
+      let root = s.plots.root;
+      if (!root) {
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = leaf;
+      } else {
+        const existingRoot = root;
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = {
+          type: "split",
+          id: nextTileId(),
+          direction: "horizontal",
+          ratio: 0.5,
+          first: existingRoot,
+          second: leaf,
+        };
+      }
+      return {
+        plots: {
+          ...s.plots,
+          panels: [...s.plots.panels, panel],
+          nextId: id + 1,
+          root,
+        },
+}; 
+});
+return id;
+},
+addConcentric: (variables) => {
+if (variables.length < 2) throw new Error("addConcentric: need at least 2 variables");
+const id = get().plots.nextId;
+const panel = { id, kind: "concentric" as const, variables };
+set((s) => {
+let root = s.plots.root;
+if (!root) {
+const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+root = leaf;
+} else {
+const existingRoot = root;
+const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+root = {
+type: "split",
+id: nextTileId(),
+direction: "horizontal",
+ratio: 0.5,
+first: existingRoot,
+second: leaf,
+};
+}
+return {
+plots: {
+...s.plots,
+panels: [...s.plots.panels, panel],
+nextId: id + 1,
+root,
+},
+};
+});
+return id;
+},
+addDotplot: (variable, bins = 20) => {
+const id = get().plots.nextId;
+const panel = { id, kind: "dotplot" as const, variable, bins };
+set((s) => {
       let root = s.plots.root;
       if (!root) {
         const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
@@ -283,7 +389,7 @@ export const createPlotsSlice: StateCreator<AppStore, [], [], PlotsSlice> = (set
   addParcoords: (variables) => {
     if (variables.length < 2) throw new Error("addParcoords: need at least 2 variables");
     const id = get().plots.nextId;
-    const panel = { id, kind: "parcoords" as const, variables };
+    const panel = { id, kind: "parcoords" as const, variables, condVar: null as string | null };
     set((s) => {
       let root = s.plots.root;
       if (!root) {
@@ -312,6 +418,15 @@ export const createPlotsSlice: StateCreator<AppStore, [], [], PlotsSlice> = (set
     });
     return id;
   },
+  setParcoordsCondVar: (id, condVar) =>
+    set((s) => ({
+      plots: {
+        ...s.plots,
+        panels: s.plots.panels.map((p) =>
+          p.id === id && p.kind === "parcoords" ? { ...p, condVar } : p,
+        ),
+      },
+    })),
   addMissingPattern: () => {
     const id = get().plots.nextId;
     const panel = { id, kind: "missingPattern" as const };
@@ -450,6 +565,37 @@ export const createPlotsSlice: StateCreator<AppStore, [], [], PlotsSlice> = (set
         ),
       },
     })),
+  addMapper: () => {
+    const id = get().plots.nextId;
+    const panel = { id, kind: "mapper" as const };
+    set((s) => {
+      let root = s.plots.root;
+      if (!root) {
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = leaf;
+      } else {
+        const existingRoot = root;
+        const leaf: TileLeaf = { type: "leaf", id: nextTileId(), tabs: [id], activeTab: id };
+        root = {
+          type: "split",
+          id: nextTileId(),
+          direction: "horizontal",
+          ratio: 0.5,
+          first: existingRoot,
+          second: leaf,
+        };
+      }
+      return {
+        plots: {
+          ...s.plots,
+          panels: [...s.plots.panels, panel],
+          nextId: id + 1,
+          root,
+        },
+      };
+    });
+    return id;
+  },
   removePanel: (id) =>
     set((s) => {
       const root = s.plots.root ? removeFromTree(s.plots.root, id) : null;

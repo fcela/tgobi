@@ -104,6 +104,7 @@ Add plots with **+ Plot**. Supported plot types:
 | Parallel coordinates | 2+ numeric variables, linked axes |
 | Dotplot | Single numeric variable, 1D strip |
 | Barchart | Single variable (categorical or numeric), frequency counts |
+| Boxplot | Single numeric variable with optional grouping; shows median, quartiles, whiskers, outliers |
 | Time series | Numeric x-axis, one or more y variables with optional grouping |
 | Missing pattern | Overview of missingness across all variables |
 
@@ -119,10 +120,44 @@ Use the brush toolbar to select rows:
   groups 1-8).
 
 The selection toolbar offers:
-- **Exclude/Include**: hide or restore ghosted (shadowed) rows.
-- **Invert**: flip selection.
-- **Isolate**: keep only selected rows visible.
-- **Restore**: bring all rows back.
+
+| Button | Action |
+|--------|--------|
+| Exclude | Hide selected rows (shadow/ghost them) |
+| Include | Restore selected shadowed rows |
+| Invert | Flip which rows are shadowed |
+| Isolate | Hide everything *except* the selected rows |
+| Restore | Bring all rows back (clear shadow mask) |
+
+### Filtering and Excluding Rows
+
+Shadowed (excluded) rows are dimmed in every plot and **excluded from all
+computations** --- tour, clustering, classification, and projection skip them.
+The status bar shows "N of M visible" where N counts only non-shadowed rows.
+
+**Common workflow --- exclude a category** (e.g. remove one region from the
+olive oil dataset):
+
+1. Add a **Barchart** of the categorical variable (e.g. `region`).
+2. Click the bar for the category you want to remove. This selects all rows
+   in that category (linked across every plot).
+3. Click **Exclude** in the selection toolbar. The rows are now shadowed.
+4. Repeat for any other categories you want to exclude.
+5. To bring rows back: select them and click **Include**, or click
+   **Restore** to un-shadow everything.
+
+**Alternative --- keep only a subset**:
+
+1. Select the rows you want to *keep* (brush in a scatterplot, click bars in a
+   barchart, or drag a range in a boxplot).
+2. Click **Isolate** ("Exclude all but selected"). Everything else is shadowed.
+
+**Exclude by boxplot range**:
+
+1. Add a **Boxplot** of the numeric variable.
+2. Click the box body to select all rows in that group, or drag vertically on
+   the boxplot to select a value range.
+3. Click **Exclude** to shadow the selected rows.
 
 ### Coloring
 
@@ -138,6 +173,33 @@ The color toolbar controls how points are colored:
 Switch to the **Identify** tool to hover over points and see their row label.
 Click to pin a label; click again to unpin. Set the label variable in the
 identify toolbar.
+
+### Keyboard Shortcuts
+
+Press **?** in the app to see the shortcut reference.
+
+| Key | Action |
+|-----|--------|
+| B | Switch to brush tool |
+| I | Switch to identify tool |
+| T | Toggle transient / persistent brush mode |
+| E | Exclude selected rows |
+| R | Restore all excluded rows |
+| Space | Play / pause tour |
+| Esc | Clear selection or stop tour |
+
+Shortcuts are ignored when focus is in an input, select, or textarea, or when
+meta/ctrl/alt is held.
+
+### Data Export
+
+Click **Export CSV** in the toolbar to download the current dataset as a CSV
+file. The export respects the current view:
+
+- **Visible only**: by default, excluded (shadowed) rows are omitted.
+- **Paint groups**: appends a `_paint_group` column when rows have been painted.
+- **Cluster labels**: appends a `_cluster` column when clustering has been
+  applied.
 
 ### Edges
 

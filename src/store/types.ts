@@ -6,6 +6,9 @@ import type { Linkage } from "@/lib/clustering/hierarchical";
 import type { ClassificationMethod } from "@/lib/classification/types";
 import type { ProjectionMethod } from "@/lib/projection/types";
 import type { DendrogramData } from "@/lib/clustering/types";
+import type { ScagnosticMeasure, ScagnosticResult } from "@/lib/scagnostics";
+import type { MapperGraph, FilterFunction, MapperParams } from "@/lib/mapper";
+import type { SweepResult } from "@/lib/mapper/sweep";
 
 export interface DataSlice {
   df: DataFrame | null;
@@ -193,6 +196,7 @@ export interface ParcoordsPanel {
   id: number;
   kind: "parcoords";
   variables: string[]; // 2..N numeric/integer vars; defines axis order left-to-right
+  condVar: string | null; // conditioning variable (categorical) for faceted display
 }
 
 export interface MissingPatternPanel {
@@ -220,7 +224,32 @@ export interface Scatter3DPanel {
   camera?: import("@/plots/scatter3d/types").Camera3D | null;
 }
 
-export type PlotPanel = ScatterPanel | BarchartPanel | DotplotPanel | ScatmatPanel | ParcoordsPanel | MissingPatternPanel | TimeseriesPanel | Scatter3DPanel;
+export interface BoxplotPanel {
+  id: number;
+  kind: "boxplot";
+  variable: string;
+  groupVar: string | null;
+}
+
+export interface AndrewsPanel {
+  id: number;
+  kind: "andrews";
+  variables: string[];
+  resolution: number;
+}
+
+export interface ConcentricCoordsPanel {
+  id: number;
+  kind: "concentric";
+  variables: string[];
+}
+
+export interface MapperPlotPanel {
+  id: number;
+  kind: "mapper";
+}
+
+export type PlotPanel = ScatterPanel | BarchartPanel | DotplotPanel | BoxplotPanel | ScatmatPanel | ParcoordsPanel | MissingPatternPanel | TimeseriesPanel | Scatter3DPanel | AndrewsPanel | ConcentricCoordsPanel | MapperPlotPanel;
 
 export type TileId = string;
 
@@ -254,9 +283,14 @@ export interface PlotsSlice {
   setScatterViewport: (id: number, viewport: PlotViewport | null) => void;
   addBarchart: (variable: string, bins?: number) => number;
   setBarchartBins: (id: number, bins: number) => void;
+  addBoxplot: (variable: string, groupVar?: string | null) => number;
+  setBoxplotGroupVar: (id: number, groupVar: string | null) => void;
+  addAndrews: (variables: string[], resolution?: number) => number;
+  addConcentric: (variables: string[]) => number;
   addDotplot: (variable: string, bins?: number) => number;
   addScatmat: (variables: string[]) => number;
   addParcoords: (variables: string[]) => number;
+  setParcoordsCondVar: (id: number, condVar: string | null) => void;
   addMissingPattern: () => number;
   addTimeseries: (x: string, y: string[], groupVar?: string | null, display?: "points" | "lines" | "points+lines") => number;
   setTimeseriesViewport: (id: number, viewport: PlotViewport | null) => void;
@@ -264,6 +298,7 @@ export interface PlotsSlice {
   addScatter3D: (x: string, y: string, z: string) => number;
   setScatter3DCamera: (id: number, camera: import("@/plots/scatter3d/types").Camera3D | null) => void;
   setScatter3DDepthCue: (id: number, depthCue: "none" | "alpha" | "size") => void;
+  addMapper: () => number;
   removePanel: (id: number) => void;
   clearPanels: () => void;
   splitTile: (tileId: TileId, direction: "horizontal" | "vertical", panelId: number, side: "first" | "second") => void;
@@ -274,6 +309,7 @@ export interface PlotsSlice {
 }
 
 export type TourShape = "1d" | "2d";
+export type TourMode = "grand" | "pp" | "manual" | "guided" | "langevin";
 
 export interface SavedView {
   id: number;
@@ -284,11 +320,18 @@ export interface SavedView {
   basis: Float64Array; // row-major p×k
 }
 
+export interface TourKeyframe {
+  id: number;
+  basis: Float64Array; // row-major p×k
+  source: "saved" | "pp" | "random";
+  name: string;
+}
+
 export interface TourSlice {
   tour: {
     activePanelId: number | null;
     shape: TourShape;
-    mode: "grand" | "pp" | "manual";
+    mode: TourMode;
     ppIndex: ProjectionPursuitIndex;
     ppValue: number | null;
     isPlaying: boolean;
@@ -302,6 +345,14 @@ export interface TourSlice {
     t: number;
     savedViews: SavedView[];
     nextViewId: number;
+    keyframes: TourKeyframe[];
+    nextKeyframeId: number;
+    scrubberT: number;
+    scrubbing: boolean;
+    langevinStep: number;
+    langevinDiffusion: number;
+    ppScoreTrace: number[];
+    ppClassSource: "paint" | string;
   };
   startTour: (panelId: number, shape: TourShape, vars: string[]) => void;
   pauseTour: () => void;
@@ -309,7 +360,7 @@ export interface TourSlice {
   stopTour: () => void;
   setTourSpeed: (speed: number) => void;
   setTourShape: (shape: TourShape) => void;
-  setTourMode: (mode: "grand" | "pp" | "manual") => void;
+  setTourMode: (mode: TourMode) => void;
   setTourPpIndex: (index: ProjectionPursuitIndex) => void;
   setTourActiveVars: (vars: string[]) => void;
   toggleTourVarFrozen: (name: string) => void;
@@ -318,6 +369,15 @@ export interface TourSlice {
   saveCurrentView: (name: string) => number;
   restoreView: (id: number) => void;
   removeView: (id: number) => void;
+  addKeyframe: (basis: Float64Array, source: TourKeyframe["source"], name?: string) => number;
+  removeKeyframe: (id: number) => void;
+  clearKeyframes: () => void;
+  setScrubberT: (t: number) => void;
+  setScrubbing: (scrubbing: boolean) => void;
+  addSavedViewAsKeyframe: (viewId: number) => void;
+  setLangevinStep: (step: number) => void;
+  setLangevinDiffusion: (diffusion: number) => void;
+  setPpClassSource: (source: "paint" | string) => void;
 }
 
 export type ImputationMethod = "none" | "fixed" | "random" | "conditional";
@@ -361,6 +421,11 @@ export interface ClusteringSlice {
     running: boolean;
     error: string | null;
     dendrogram: DendrogramData | null;
+    reachability: Float64Array | null;
+    ordering: Int32Array | null;
+    silhouetteMean: number | null;
+    silhouettePerCluster: { id: number; mean: number; size: number }[] | null;
+    kDistancePlot: Float64Array | null;
   };
   setClusteringMethod: (method: ClusteringMethod) => void;
   setClusteringVariables: (vars: string[]) => void;
@@ -375,6 +440,12 @@ export interface ClusteringSlice {
   clearClustering: () => void;
 }
 
+export interface CVResult {
+  meanAccuracy: number;
+  foldAccuracies: number[];
+  nFolds: number;
+}
+
 export interface ClassificationSlice {
   classification: {
     method: ClassificationMethod;
@@ -384,16 +455,30 @@ export interface ClassificationSlice {
     knnK: number;
     rfNEstimators: number;
     rfMaxDepth: number;
-    boundaryPaint: Uint8Array | null;
-    boundaryGrid: Float64Array | null;
-    gridSize: number;
-    boundaryMins: Float64Array | null;
-    boundaryMaxs: Float64Array | null;
+    lrLambda: number;
+    lrMaxIter: number;
+    trainRatio: number;
+    useTrainTestSplit: boolean;
+  boundaryPaint: Uint8Array | null;
+  boundaryGrid: Float64Array | null;
+  gridSize: number;
+  boundaryMins: Float64Array | null;
+  boundaryMaxs: Float64Array | null;
+  boundaryProbabilities: Float32Array | null;
+  boundariesVisible: boolean;
+  boundaryNOrig: number;
     predictions: Int16Array | null;
     misclassified: Uint8Array | null;
     classToPaint: number[] | null;
     running: boolean;
     error: string | null;
+    confusionMatrix: number[][] | null;
+    classLabels: string[] | null;
+    accuracy: number | null;
+    perClassMetrics: { label: string; precision: number; recall: number; f1: number; support: number }[] | null;
+    featureImportance: number[] | null;
+    preClassifyShape: Uint8Array | null;
+    cvResult: CVResult | null;
   };
   setClassificationMethod: (method: ClassificationMethod) => void;
   setClassificationVariables: (vars: string[]) => void;
@@ -402,9 +487,21 @@ export interface ClassificationSlice {
   setClassificationKnnK: (k: number) => void;
   setClassificationRfNEstimators: (n: number) => void;
   setClassificationRfMaxDepth: (d: number) => void;
+  setClassificationLrLambda: (lambda: number) => void;
+  setClassificationLrMaxIter: (maxIter: number) => void;
+  setClassificationTrainRatio: (ratio: number) => void;
+  setClassificationUseTrainTestSplit: (use: boolean) => void;
   runClassification: () => void;
   applyClassificationBoundaries: () => void;
   clearClassification: () => void;
+  resetClassification: () => void;
+}
+
+export interface ProjectionQuality {
+  trustworthiness: number;
+  continuity: number;
+  shepardOrigDists: Float64Array | null;
+  shepardEmbDists: Float64Array | null;
 }
 
 export interface ProjectionSlice {
@@ -425,6 +522,11 @@ export interface ProjectionSlice {
     varImportance: number[] | null;
     running: boolean;
     error: string | null;
+    morphEmbeddings: { label: string; embedding: Float64Array }[] | null;
+    morphIndex: number;
+    morphT: number;
+    morphPlaying: boolean;
+    quality: ProjectionQuality | null;
   };
   setProjectionMethod: (method: ProjectionMethod) => void;
   setProjectionVariables: (vars: string[]) => void;
@@ -438,6 +540,73 @@ export interface ProjectionSlice {
   runProjection: () => void;
   materializeProjection: () => void;
   clearProjection: () => void;
+  compareDR: () => void;
+  setMorphIndex: (i: number) => void;
+  setMorphT: (t: number) => void;
+  setMorphPlaying: (playing: boolean) => void;
+  stopMorph: () => void;
 }
 
-export type AppStore = DataSlice & VariablesSlice & SelectionSlice & BrushSlice & ColorSlice & ToolsSlice & EdgesSlice & HullsSlice & PlotsSlice & TourSlice & MissingSlice & ClusteringSlice & ClassificationSlice & ProjectionSlice;
+export interface ScagnosticsSlice {
+  scagnostics: {
+    variables: string[];
+    results: ScagnosticResult[] | null;
+    running: boolean;
+    error: string | null;
+    sortMeasure: ScagnosticMeasure;
+    sortDescending: boolean;
+    filterMeasure: ScagnosticMeasure;
+    filterThreshold: number;
+  };
+  setScagnosticsVariables: (vars: string[]) => void;
+  runScagnostics: () => void;
+  setScagnosticsSortMeasure: (measure: ScagnosticMeasure) => void;
+  setScagnosticsSortDescending: (desc: boolean) => void;
+  setScagnosticsFilterMeasure: (measure: ScagnosticMeasure) => void;
+  setScagnosticsFilterThreshold: (threshold: number) => void;
+  clearScagnostics: () => void;
+}
+
+export interface MapperSlice {
+  mapper: {
+    params: MapperParams;
+    graph: MapperGraph | null;
+    running: boolean;
+    error: string | null;
+    colorBy: string;
+    selectedNodeId: number | null;
+    sweepResults: SweepResult[] | null;
+    sweepRunning: boolean;
+  };
+  setMapperFilter: (filter: FilterFunction) => void;
+  setMapperFilterVar: (name: string | null) => void;
+  setMapperIntervals: (n: number) => void;
+  setMapperOverlap: (o: number) => void;
+  setMapperClusterK: (k: number) => void;
+  setMapperVariables: (vars: string[]) => void;
+  runMapper: () => void;
+  selectMapperNode: (nodeId: number | null) => void;
+  setMapperColorBy: (colorBy: string) => void;
+  clearMapper: () => void;
+  runMapperSweep: () => void;
+  clearMapperSweep: () => void;
+}
+
+export interface LessonSlice {
+  lessons: {
+    activeLessonId: string | null;
+    activeStep: number;
+  };
+  startLesson: (id: string) => void;
+  setLessonStep: (step: number) => void;
+  nextLessonStep: () => void;
+  prevLessonStep: () => void;
+  endLesson: () => void;
+}
+
+export interface SessionSlice {
+  saveSession: () => void;
+  openSession: () => Promise<void>;
+}
+
+export type AppStore = DataSlice & VariablesSlice & SelectionSlice & BrushSlice & ColorSlice & ToolsSlice & EdgesSlice & HullsSlice & PlotsSlice & TourSlice & MissingSlice & ClusteringSlice & ClassificationSlice & ProjectionSlice & ScagnosticsSlice & MapperSlice & LessonSlice & SessionSlice;

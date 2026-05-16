@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ParcoordsPanel } from "@/store/types";
 import { useAppStore } from "@/store";
-import { bitGet } from "@/lib/brush/hitTest";
+import { bitGet, bitSet } from "@/lib/brush/hitTest";
 import { formatRowLabel } from "@/lib/data/format";
 import { resolveScaledValues } from "@/lib/data/resolveScaling";
 import { categoricalScale, sequentialScale, divergingScale } from "@/lib/color/scales";
@@ -17,9 +17,12 @@ import {
   dataToY,
   PARCOORDS_DEFAULT_LINE_ALPHA,
   type VisualState,
+  type ParcoordsLayout,
 } from "@/plots/parcoords/parcoordsRender";
 
 const FIXED_FALLBACK = "#88c";
+const FACET_LABEL_H = 18;
+const FACET_GAP = 4;
 
 export interface ParcoordsProps {
   panel: ParcoordsPanel;
@@ -41,18 +44,20 @@ export function Parcoords({ panel }: ParcoordsProps) {
   const setIdentifyHover = useAppStore((s) => s.setIdentifyHover);
   const togglePinnedIdentify = useAppStore((s) => s.togglePinnedIdentify);
   const removePanel = useAppStore((s) => s.removePanel);
+  const setParcoordsCondVar = useAppStore((s) => s.setParcoordsCondVar);
 
   const cardRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ReglParcoordsRenderer | null>(null);
 
-  // Canvas size in CSS pixels
   const sizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
   const [tip, setTip] = useState<{ text: string; px: number; py: number } | null>(null);
   const [alpha, setAlpha] = useState<number | null>(null);
   const [labels, setLabels] = useState<PinnedLabel[]>([]);
+
+  const condActive = !!panel.condVar;
 
   // Resolved columns for each variable in panel.variables, with scaling applied
   const cols = useMemo(() => {
@@ -65,6 +70,20 @@ export function Parcoords({ panel }: ParcoordsProps) {
       return { type: c.type as "numeric" | "integer", name: c.name, length: c.length, values: resolved.values, missing: { buffer: resolved.missingBuffer, isMissing: c.missing.isMissing.bind(c.missing) } };
     });
   }, [df, panel.variables, spec]);
+
+  // Categorical variable names for the condVar dropdown
+  const categoricalVars = useMemo(() => {
+    if (!df) return [];
+    return df.columns.filter((c) => c.type === "categorical").map((c) => c.name);
+  }, [df]);
+
+  // Conditioning column info (levels and codes)
+  const condColInfo = useMemo(() => {
+    if (!df || !panel.condVar) return null;
+    const c = df.column(panel.condVar);
+    if (!c || c.type !== "categorical") return null;
+    return { levels: c.levels, codes: c.codes, missing: c.missing };
+  }, [df, panel.condVar]);
 
   // Per-row colors
   const colors: ReadonlyArray<string> = useMemo(() => {
@@ -120,12 +139,127 @@ export function Parcoords({ panel }: ParcoordsProps) {
 
     const nAxes = panel.variables.length;
 
-    // Compute data ranges for each axis
+    // Compute data ranges for each axis (shared across facets)
     const ranges = cols.map((col) => {
       if (!col) return { min: 0, max: 1 };
       return dataRange(col.values, col.missing.buffer);
     });
 
+    const renderCols = cols.map((c) =>
+      c ? { values: c.values, missing: c.missing.buffer } : null,
+    );
+
+    const activeBrushAxis =
+      brush.activePanelId === panel.id ? activeDragAxis.current : null;
+    const activeBrushY =
+      brush.activePanelId === panel.id && brush.activeRect
+        ? { y0: brush.activeRect.y0, y1: brush.activeRect.y1 }
+        : null;
+
+    // --- Conditional mode: faceted Canvas2D ---
+    if (panel.condVar && condColInfo) {
+      // Detach Regl renderer if present
+      if (rendererRef.current) {
+        rendererRef.current.detach();
+        rendererRef.current = null;
+      }
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const levels = condColInfo.levels;
+      const nLevels = levels.length;
+      if (nLevels === 0) {
+        ctx.clearRect(0, 0, w, h);
+        return;
+      }
+
+      const totalGaps = (nLevels - 1) * FACET_GAP + nLevels * FACET_LABEL_H;
+      const facetH = Math.max(40, Math.floor((h - totalGaps) / nLevels));
+
+      ctx.clearRect(0, 0, w, h);
+
+      let yOff = 0;
+      for (let li = 0; li < nLevels; li++) {
+        // Draw facet label
+        ctx.fillStyle = "#aaa";
+        ctx.font = "10px \"Space Grotesk\", ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(levels[li]!, 4, yOff + 2);
+        yOff += FACET_LABEL_H;
+
+        // Build modified shadow: mark rows NOT in this level as shadowed
+        const facetShadow = new Uint8Array(selection.shadow.length);
+        const baseShadow = selection.shadow;
+        const codes = condColInfo.codes;
+        const condMissing = condColInfo.missing;
+        for (let i = 0; i < df.nrow; i++) {
+          const condMissingRow = condMissing.isMissing(i);
+          const inLevel = !condMissingRow && codes[i] === li;
+          if (!inLevel || bitGet(baseShadow, i)) {
+            bitSet(facetShadow, i);
+          }
+        }
+
+        const facetLayout = computeLayout(w, facetH, nAxes, ranges);
+
+        const facetVisual: VisualState = {
+          color: colors,
+          alpha: alpha ?? defaultParcoordsAlpha(df.nrow),
+          selected: selection.mask,
+          paint: selection.paint,
+          shadow: facetShadow,
+          paintPalette,
+        };
+
+        ctx.save();
+        ctx.translate(0, yOff);
+
+        // Clip to facet region
+        ctx.beginPath();
+        ctx.rect(0, 0, w, facetH);
+        ctx.clip();
+
+        drawParcoords(ctx, w, facetH, panel.variables, renderCols, facetLayout, facetVisual, activeBrushAxis, activeBrushY);
+
+        ctx.restore();
+
+        // Draw separator line below this facet
+        yOff += facetH;
+        if (li < nLevels - 1) {
+          ctx.strokeStyle = "#333";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, yOff + FACET_GAP / 2);
+          ctx.lineTo(w, yOff + FACET_GAP / 2);
+          ctx.stroke();
+          yOff += FACET_GAP;
+        }
+      }
+
+      // Update yPxRef for identify in conditional mode
+      // Use the full layout for the first facet as a rough approximation
+      const fullLayout = computeLayout(w, facetH, nAxes, ranges);
+      const yPx: Float64Array[] = fullLayout.axes.map((ax, k) => {
+        const col = cols[k];
+        const arr = new Float64Array(df.nrow);
+        if (!col) { arr.fill(NaN); return arr; }
+        for (let i = 0; i < df.nrow; i++) {
+          if (bitGet(col.missing.buffer, i)) { arr[i] = NaN; continue; }
+          arr[i] = dataToY(col.values[i]!, ax.min, ax.max, fullLayout.plotTop, fullLayout.plotH);
+        }
+        return arr;
+      });
+      yPxRef.current = yPx;
+
+      return;
+    }
+
+    // --- Normal (non-conditional) mode ---
     const layout = computeLayout(w, h, nAxes, ranges);
 
     const visual: VisualState = {
@@ -153,16 +287,6 @@ export function Parcoords({ panel }: ParcoordsProps) {
     yPxRef.current = yPx;
     updatePinnedLabels(layout, yPx);
 
-    const activeBrushAxis =
-      brush.activePanelId === panel.id ? activeDragAxis.current : null;
-    const activeBrushY =
-      brush.activePanelId === panel.id && brush.activeRect
-        ? { y0: brush.activeRect.y0, y1: brush.activeRect.y1 }
-        : null;
-
-    const renderCols = cols.map((c) =>
-      c ? { values: c.values, missing: c.missing.buffer } : null,
-    );
     const renderer = rendererRef.current;
     if (renderer) {
       renderer.draw({
@@ -183,9 +307,23 @@ export function Parcoords({ panel }: ParcoordsProps) {
     drawParcoords(ctx, w, h, panel.variables, renderCols, layout, visual, activeBrushAxis, activeBrushY);
   };
 
+  // Initialize renderer (only when NOT in conditional mode)
   useEffect(() => {
+    if (condActive) {
+      if (rendererRef.current) {
+        rendererRef.current.detach();
+        rendererRef.current = null;
+      }
+      requestPaint();
+      return;
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
+    // Only create Regl renderer if not already present
+    if (rendererRef.current) {
+      requestPaint();
+      return;
+    }
     try {
       const renderer = new ReglParcoordsRenderer();
       renderer.attach(canvas);
@@ -200,7 +338,7 @@ export function Parcoords({ panel }: ParcoordsProps) {
       rendererRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [condActive]);
 
   // Resize observer
   useEffect(() => {
@@ -238,7 +376,7 @@ export function Parcoords({ panel }: ParcoordsProps) {
   useEffect(() => {
     requestPaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, cols, colors, selection, brush.activeRect, brush.activePanelId, paintPalette, alpha, pinnedRows, labelVar]);
+  }, [df, cols, colors, selection, brush.activeRect, brush.activePanelId, paintPalette, alpha, pinnedRows, labelVar, condColInfo]);
 
   // Brush drag state
   const activeDragAxis = useRef<number | null>(null);
@@ -260,19 +398,36 @@ export function Parcoords({ panel }: ParcoordsProps) {
     windowMouseUpRef.current = null;
   };
 
-  const getAxisFromEvent = (e: React.MouseEvent<HTMLCanvasElement>): number | null => {
+  const getLayoutForEvent = (): { layout: ParcoordsLayout; facetH: number; facetYOff: number } | null => {
     if (!df) return null;
-    const canvas = e.currentTarget as HTMLCanvasElement;
-    const rect = canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
     const { w, h } = sizeRef.current;
     const nAxes = panel.variables.length;
     const ranges = cols.map((col) => {
       if (!col) return { min: 0, max: 1 };
       return dataRange(col.values, col.missing.buffer);
     });
+
+    if (panel.condVar && condColInfo) {
+      const levels = condColInfo.levels;
+      const nLevels = levels.length;
+      if (nLevels === 0) return null;
+      const totalGaps = (nLevels - 1) * FACET_GAP + nLevels * FACET_LABEL_H;
+      const facetH = Math.max(40, Math.floor((h - totalGaps) / nLevels));
+      const layout = computeLayout(w, facetH, nAxes, ranges);
+      return { layout, facetH, facetYOff: -1 };
+    }
+
     const layout = computeLayout(w, h, nAxes, ranges);
-    return hitAxis(layout.axes, px);
+    return { layout, facetH: h, facetYOff: 0 };
+  };
+
+  const getAxisFromEvent = (e: React.MouseEvent<HTMLCanvasElement>): number | null => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const info = getLayoutForEvent();
+    if (!info) return null;
+    return hitAxis(info.layout.axes, px);
   };
 
   const identifyRowAt = (px: number, py: number): number => {
@@ -284,6 +439,43 @@ export function Parcoords({ panel }: ParcoordsProps) {
       if (!col) return { min: 0, max: 1 };
       return dataRange(col.values, col.missing.buffer);
     });
+
+    if (panel.condVar && condColInfo) {
+      const levels = condColInfo.levels;
+      const nLevels = levels.length;
+      if (nLevels === 0) return -1;
+      const totalGaps = (nLevels - 1) * FACET_GAP + nLevels * FACET_LABEL_H;
+      const facetH = Math.max(40, Math.floor((h - totalGaps) / nLevels));
+      const facetLayout = computeLayout(w, facetH, nAxes, ranges);
+
+      // Determine which facet the py falls into
+      let yOff = 0;
+      for (let li = 0; li < nLevels; li++) {
+        yOff += FACET_LABEL_H;
+        const facetTop = yOff;
+        const facetBot = yOff + facetH;
+        if (py >= facetTop && py <= facetBot) {
+          const localPy = py - facetTop;
+          const facetYPx: Float64Array[] = facetLayout.axes.map((ax, k) => {
+            const col = cols[k];
+            const arr = new Float64Array(nRows);
+            if (!col) { arr.fill(NaN); return arr; }
+            for (let i = 0; i < nRows; i++) {
+              if (bitGet(col.missing.buffer, i)) { arr[i] = NaN; continue; }
+              const condMissingRow = condColInfo.missing.isMissing(i);
+              if (condMissingRow || condColInfo.codes[i] !== li) { arr[i] = NaN; continue; }
+              arr[i] = dataToY(col.values[i]!, ax.min, ax.max, facetLayout.plotTop, facetLayout.plotH);
+            }
+            return arr;
+          });
+          const row = identifyRow(px, localPy, facetLayout.axes, facetYPx, nRows, nAxes);
+          return row;
+        }
+        yOff += facetH + FACET_GAP;
+      }
+      return -1;
+    }
+
     const layout = computeLayout(w, h, nAxes, ranges);
     const yPx = yPxRef.current;
     if (yPx.length !== nAxes || nRows <= 0) return -1;
@@ -313,22 +505,38 @@ export function Parcoords({ panel }: ParcoordsProps) {
     activeDragAxis.current = axisIdx;
     const local = new Uint8Array(Math.ceil(df.nrow / 8));
     dragRef.current = { y0: y, localMask: local };
-    // Use activeRect to store y range; x0/x1 are axis x (unused for parcoords brush display)
-    const { w, h } = sizeRef.current;
-    const nAxes = panel.variables.length;
-    const ranges = cols.map((col) => {
-      if (!col) return { min: 0, max: 1 };
-      return dataRange(col.values, col.missing.buffer);
-    });
-    const layout = computeLayout(w, h, nAxes, ranges);
-    const ax = layout.axes[axisIdx];
+
+    const info = getLayoutForEvent();
+    if (!info) return;
+    const ax = info.layout.axes[axisIdx];
     const axX = ax ? ax.x : 0;
-    // Store in brush store with x representing axis position
-    setActiveBrush(panel.id, { x0: axX, y0: y, x1: axX, y1: y });
+
+    if (panel.condVar && condColInfo) {
+      const facetY = computeFacetYOffset(y, condColInfo.levels.length, info.facetH);
+      if (facetY) {
+        setActiveBrush(panel.id, { x0: axX, y0: facetY.localY, x1: axX, y1: facetY.localY });
+      }
+    } else {
+      setActiveBrush(panel.id, { x0: axX, y0: y, x1: axX, y1: y });
+    }
     clearWindowMouseUp();
     const onGlobalUp = () => finishBrush();
     windowMouseUpRef.current = onGlobalUp;
     window.addEventListener("mouseup", onGlobalUp);
+  };
+
+  const computeFacetYOffset = (canvasY: number, nLevels: number, facetH: number): { facetIdx: number; localY: number } | null => {
+    let yOff = 0;
+    for (let li = 0; li < nLevels; li++) {
+      yOff += FACET_LABEL_H;
+      const facetTop = yOff;
+      const facetBot = yOff + facetH;
+      if (canvasY >= facetTop && canvasY <= facetBot) {
+        return { facetIdx: li, localY: canvasY - facetTop };
+      }
+      yOff += facetH + FACET_GAP;
+    }
+    return null;
   };
 
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -357,20 +565,58 @@ export function Parcoords({ panel }: ParcoordsProps) {
     if (activeTool !== "brush") return;
     if (!dragRef.current || !df || activeDragAxis.current === null) return;
 
-    const { w, h } = sizeRef.current;
-    const nAxes = panel.variables.length;
-    const ranges = cols.map((col) => {
-      if (!col) return { min: 0, max: 1 };
-      return dataRange(col.values, col.missing.buffer);
-    });
-    const layout = computeLayout(w, h, nAxes, ranges);
+    const info = getLayoutForEvent();
+    if (!info) return;
     const axIdx = activeDragAxis.current;
-    const ax = layout.axes[axIdx];
+    const ax = info.layout.axes[axIdx];
     if (!ax) return;
 
     const drag = dragRef.current;
     const y0 = Math.min(drag.y0, py);
     const y1 = Math.max(drag.y0, py);
+
+    if (panel.condVar && condColInfo) {
+      const nLevels = condColInfo.levels.length;
+      const totalGaps = (nLevels - 1) * FACET_GAP + nLevels * FACET_LABEL_H;
+      const facetH = Math.max(40, Math.floor((sizeRef.current.h - totalGaps) / nLevels));
+
+      const facetInfo = computeFacetYOffset(drag.y0, nLevels, facetH);
+      if (facetInfo) {
+        const facetYBase = FACET_LABEL_H + facetInfo.facetIdx * (facetH + FACET_GAP + FACET_LABEL_H);
+        const localY0 = Math.min(facetInfo.localY, py - facetYBase);
+        const localY1 = Math.max(facetInfo.localY, py - facetYBase);
+        const clampedY0 = Math.max(0, Math.min(localY0, facetH));
+        const clampedY1 = Math.max(0, Math.min(localY1, facetH));
+
+        const col = cols[axIdx];
+        const newMask = brushAxisRange(
+          ax,
+          col ? { values: col.values, missing: col.missing.buffer } : null,
+          clampedY0,
+          clampedY1,
+          info.layout.plotTop,
+          info.layout.plotH,
+          df.nrow,
+        );
+
+        const codes = condColInfo.codes;
+        const condMissing = condColInfo.missing;
+        const filteredMask = new Uint8Array(newMask);
+        for (let i = 0; i < df.nrow; i++) {
+          if (bitGet(filteredMask, i)) {
+            const condMissingRow = condMissing.isMissing(i);
+            if (condMissingRow || codes[i] !== facetInfo.facetIdx) {
+              filteredMask[i >> 3] = filteredMask[i >> 3]! & ~(1 << (i & 7));
+            }
+          }
+        }
+
+        drag.localMask = filteredMask;
+        setSelectionMask(new Uint8Array(filteredMask));
+      }
+      setActiveBrush(panel.id, { x0: ax.x, y0: drag.y0, x1: ax.x, y1: py });
+      return;
+    }
 
     const col = cols[axIdx];
     const newMask = brushAxisRange(
@@ -378,8 +624,8 @@ export function Parcoords({ panel }: ParcoordsProps) {
       col ? { values: col.values, missing: col.missing.buffer } : null,
       y0,
       y1,
-      layout.plotTop,
-      layout.plotH,
+      info.layout.plotTop,
+      info.layout.plotH,
       df.nrow,
     );
     drag.localMask = newMask;
@@ -447,6 +693,18 @@ export function Parcoords({ panel }: ParcoordsProps) {
             aria-label="line alpha"
           />
         </label>
+        <select
+          className="parcoords-cond-select"
+          value={panel.condVar ?? ""}
+          onChange={(e) => setParcoordsCondVar(panel.id, e.target.value || null)}
+          aria-label="conditioning variable"
+          title="conditioning variable"
+        >
+          <option value="">—</option>
+          {categoricalVars.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
         <button
           className="close"
           aria-label={`remove plot ${panel.id}`}

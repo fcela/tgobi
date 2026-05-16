@@ -47,14 +47,14 @@ $$f_\text{cm}(\mathbf{B}) = \frac{1}{n}\sum_{i=1}^{n} \exp\!\left(-\tfrac{1}{2}\
 **LDA index** [Cook et al. 1995]: maximizes between-class separation relative to within-class
 scatter.
 
-$$f_\text{lda}(\mathbf{B}) = \frac{\operatorname{tr}(\mathbf{B}^T \mathbf{S}_B \mathbf{B})}{\operatorname{tr}(\mathbf{B}^T \mathbf{S}_W \mathbf{B})}$$
+$$f_\text{lda}(\mathbf{B}) = \frac{\text{tr}(\mathbf{B}^T \mathbf{S}_B \mathbf{B})}{\text{tr}(\mathbf{B}^T \mathbf{S}_W \mathbf{B})}$$
 
 where $\mathbf{S}_B$ is the between-class scatter matrix and $\mathbf{S}_W$ is
 the within-class scatter matrix. Requires painted groups (2+ colors).
 
 **PCA index**: maximizes total projected variance.
 
-$$f_\text{pca}(\mathbf{B}) = \operatorname{tr}(\mathbf{B}^T \mathbf{S}\,\mathbf{B})$$
+$$f_\text{pca}(\mathbf{B}) = \text{tr}(\mathbf{B}^T \mathbf{S}\,\mathbf{B})$$
 
 where $\mathbf{S}$ is the sample covariance matrix.
 
@@ -71,6 +71,69 @@ kurtosis.
 Fixes all variables except one. The contribution of the selected variable is
 controlled by a slider from 0 (excluded) to 1 (fully contributing). The basis
 is re-orthogonalized after adjustment so it remains valid.
+
+### Guided (steerable) tour with keyframes
+
+The guided tour [Lekschas & Abdennur 2026] lets the user define a sequence of
+keyframe projections, then smoothly interpolates between them using Catmull-Rom
+spline blending of geodesic segments, with Gram-Schmidt re-orthonormalization
+after each evaluation.
+
+**Keyframes**: a sequence of orthonormal frames
+$\mathbf{F}_0, \mathbf{F}_1, \ldots, \mathbf{F}_{m-1}$, each a $p \times k$
+basis matrix. Keyframes can come from saved views, PP-optimized targets, or
+the current projection.
+
+**Geodesic distance**: measured via principal angles from the SVD of
+$\mathbf{F}_a^\top \mathbf{F}_z$, corresponding to Grassmannian manifold
+distance:
+
+$$d(\mathbf{F}_a, \mathbf{F}_z) = \sqrt{\sum_{j=1}^{k} \theta_j^2}$$
+
+where $\theta_j = \arccos(\sigma_j)$ and $\sigma_j$ are the singular values of
+$\mathbf{F}_a^\top \mathbf{F}_z$.
+
+**Catmull-Rom interpolation**: for each segment $[\mathbf{F}_i, \mathbf{F}_{i+1}]$,
+the spline blends the geodesic path with Hermite tangent vectors $\mathbf{m}_i$
+computed from neighboring segments:
+
+$$\mathbf{B}(t) = h_{00}(t)\,\mathbf{F}_i + h_{10}(t)\,\mathbf{m}_i + h_{01}(t)\,\mathbf{F}_{i+1} + h_{11}(t)\,\mathbf{m}_{i+1}$$
+
+where $h_{00}, h_{10}, h_{01}, h_{11}$ are the standard Hermite basis functions.
+After evaluation, $\mathbf{B}(t)$ is re-orthonormalized via Gram-Schmidt.
+
+**Arc-length parameterization**: cumulative arc-length table enables $O(\log n)$
+binary search, ensuring perceptually uniform playback speed. The scrubber
+slider maps position $u \in [0, 1]$ to arc-length $s = u \cdot L_\text{total}$,
+then to the corresponding segment and local parameter.
+
+**Ping-pong playback**: the animation traverses the spline forward to $u = 1$,
+then reverses to $u = 0$, creating a continuous loop through all keyframes.
+
+### Langevin Tour
+
+The Langevin tour [Harrison 2023] replaces deterministic path planning with a
+stochastic diffusion process on the Stiefel manifold of orthonormal frames.
+
+**Dynamics**: at each step, the basis $\mathbf{B}$ evolves according to the
+overdamped Langevin equation:
+
+$$\mathbf{B}_{t+1} = \text{retract}\!\left(\mathbf{B}_t + \eta\,\nabla f(\mathbf{B}_t) + \sqrt{2\eta\,T}\;\boldsymbol{\xi}_t\right)$$
+
+where $f$ is the PP index (energy), $\eta$ is the step size, $T$ is the
+temperature (diffusion strength), and $\boldsymbol{\xi}_t \sim \mathcal{N}(0, \mathbf{I})$
+is Gaussian noise projected onto the tangent space of the Stiefel manifold.
+The retraction step (QR-based re-orthonormalization) keeps $\mathbf{B}$ valid.
+
+**Step size** controls the displacement per frame. **Diffusion** (temperature)
+controls randomness: $T = 0$ gives deterministic PP ascent; higher $T$ adds
+exploration noise. This produces a smoother, more organic tour path than
+step-and-optimize PP, while still spending more time near interesting
+projections.
+
+**Warning**: the Langevin tour converges toward local optima of the PP index,
+not the global optimum. It is a stochastic search, and different runs may
+visit different projections.
 
 ---
 
@@ -280,6 +343,63 @@ disconnected points apart. Re-centered each epoch.
 **Variable importance** (permutation-based, 50 epochs per permuted run,
 3 repetitions).
 
+### DR Quality Metrics
+
+After computing any dimensionality reduction, tgobi reports quality
+metrics from Venna & Kaski [2006] to quantify how faithfully the
+low-dimensional embedding preserves the structure of the original
+high-dimensional data.
+
+**Trustworthiness** measures whether points that appear nearby in the
+embedding were actually nearby in the original space. For each point $i$,
+identify its $k$ nearest neighbors in the embedding ($U_i$). Any
+neighbor $j \in U_i$ that is *not* among the $k$ nearest neighbors in
+the original space ($V_i$) contributes a penalty proportional to how far
+down the original ranking it falls:
+
+$$T(k) = 1 - \frac{2}{nk(2n - 3k - 1)} \sum_{i=1}^{n} \sum_{j \in U_i \setminus V_i} \bigl(r(i,j) - k\bigr)$$
+
+where $r(i,j)$ is the rank of $j$ in the original-space neighbor
+ordering of $i$. A value near 1 means the embedding does not create
+false neighborhoods; a low value means points that look close in 2D are
+actually far apart in the original data (intrusions).
+
+**Continuity** is the complementary measure: whether points that were
+nearby in the original space remain nearby in the embedding. For each
+point $i$, neighbors $j \in V_i$ that are missing from $U_i$ contribute
+a penalty proportional to their rank in the embedding ordering:
+
+$$C(k) = 1 - \frac{2}{nk(2n - 3k - 1)} \sum_{i=1}^{n} \sum_{j \in V_i \setminus U_i} \bigl(\hat{r}(i,j) - k\bigr)$$
+
+where $\hat{r}(i,j)$ is the rank of $j$ in the embedding-space neighbor
+ordering. A value near 1 means the embedding does not tear apart true
+neighborhoods (extrusions).
+
+Both metrics use $k = 10$ by default (clamped to $n - 2$).
+
+**Interpretation**:
+- $T, C > 0.9$: excellent preservation
+- $T, C > 0.8$: good
+- $T, C > 0.5$: moderate distortion
+- $T, C < 0.5$: substantial distortion
+
+**Shepard diagram**: a scatterplot of original pairwise distances
+(x-axis) vs. embedding pairwise distances (y-axis). If the embedding
+perfectly preserved all distances, all points would lie on the diagonal
+$y = x$. Spread above the diagonal indicates distances that have been
+stretched; below indicates compression. For nonlinear methods like
+t-SNE and UMAP, the Shepard diagram typically shows a step-function
+shape: local distances are approximately preserved (points near the
+diagonal for small distances), while global distances are compressed
+(points fall below the diagonal for large distances).
+
+The Shepard diagram samples up to 500 pairs from the upper triangle of
+the distance matrix to keep rendering tractable.
+
+**Warning**: These are global summary measures. A high
+trustworthiness/continuity does not guarantee every region is
+faithfully represented. Always combine with visual inspection.
+
 ---
 
 ## Clustering
@@ -359,20 +479,76 @@ priors), and $n$ is the number of points.
 
 3. Select the $k$ that maximizes BIC.
 
+### Silhouette Coefficient
+
+The silhouette [Rousseeuw 1987] measures how well each point fits within its
+assigned cluster versus the nearest alternative cluster.
+
+For point $i$ in cluster $C_a$, define:
+
+- $a(i)$: mean distance from $i$ to all other points in $C_a$ (intra-cluster
+  cohesion)
+- $b(i)$: smallest mean distance from $i$ to points in any other cluster
+  (nearest-cluster separation)
+
+The silhouette score for point $i$:
+
+$$s(i) = \frac{b(i) - a(i)}{\max(a(i),\, b(i))}$$
+
+Scores range from $-1$ (wrong cluster) to $+1$ (well-clustered). A score near
+$0$ means the point sits on the boundary between two clusters.
+
+**Mean silhouette** is computed for all clustering methods with $k \ge 2$.
+Per-cluster mean silhouettes are also reported, helping identify which clusters
+are well-separated and which overlap.
+
+**Complexity**: $O(n^2)$ pairwise distances. Currently computed synchronously;
+future versions may workerize this.
+
+### k-Distance Plot
+
+For DBSCAN and OPTICS, the $k$-distance plot [Ester et al. 1996] helps select
+the $\varepsilon$ parameter.
+
+For each point $i$, the $k$-distance is the distance to its $k$-th nearest
+neighbor (where $k = \text{minPts}$). Sorting these distances in descending
+order produces a curve. A natural choice for $\varepsilon$ is the "elbow" —
+the point where the curve transitions from a gradual slope to a sharp increase,
+indicating the transition from dense regions to sparse outliers.
+
+**Implementation**: for each point, all pairwise distances are computed and
+sorted. The $k$-th smallest distance is extracted. The resulting `Float64Array`
+is sorted in descending order for display.
+
+**Complexity**: $O(n^2)$ pairwise distances, same as silhouette.
+
+### OPTICS Reachability Plot
+
+The OPTICS reachability plot shows the reachability distance of each point in
+the ordering produced by the OPTICS algorithm. Valleys in the plot correspond
+to clusters; deep valleys indicate dense, well-separated clusters; shallow
+valleys indicate loose groupings.
+
+The xi-based extraction method identifies cluster boundaries where reachability
+drops by a factor of $\xi$: a cluster starts where reachability drops steeply
+and ends where it rises steeply again. Points not assigned to any cluster are
+labeled as noise.
+
 ---
 
 ## Classification
 
-All classifiers use **painted groups** as class labels (no categorical variable
-required). The workflow is: brush 2+ groups of points, select features, train,
-then visualize decision boundaries.
+Classifiers use either **brushed groups** (painted on the scatterplot) or a
+**categorical variable** as class labels. The workflow is: choose a class
+source, select predictor variables, pick a method, train, then visualize
+decision boundaries.
 
 ### KNN --- K-Nearest Neighbors
 
 Non-parametric: assigns a point to the majority class among its $k$ nearest
 training neighbors (Euclidean distance, equal weighting).
 
-$$\hat{y}(\mathbf{x}) = \operatorname{mode}\{y_i : i \in k\text{NN}(\mathbf{x})\}$$
+$$\hat{y}(\mathbf{x}) = \text{mode}\{y_i : i \in k\text{NN}(\mathbf{x})\}$$
 
 Ties broken by the class with the nearest neighbor.
 
@@ -389,32 +565,129 @@ $$P(y = c) = \frac{n_c}{n}, \qquad P(x_j \mid y = c) \sim \mathcal{N}(\mu_{cj},\
 
 $$\hat{y}(\mathbf{x}) = \arg\max_c \left[\log P(y{=}c) + \sum_{j=1}^{p}\log P(x_j \mid y{=}c)\right]$$
 
+### Multinomial Logistic Regression
+
+Linear classifier that models class probabilities using the softmax function.
+Finds linear decision boundaries between classes.
+
+**Model**: for $K$ classes, the probability of class $c$ given input
+$\mathbf{x}$ is:
+
+$$P(y = c \mid \mathbf{x}) = \frac{\exp(\mathbf{w}_c^T \mathbf{x} + b_c)}{\sum_{k=1}^{K}\exp(\mathbf{w}_k^T \mathbf{x} + b_k)}$$
+
+**Training**: minimize cross-entropy loss with L2 regularization using batch
+gradient descent. Features are standardized internally (zero mean, unit
+variance) before fitting.
+
+**Regularization** ($\lambda$): L2 penalty on weights
+$\frac{\lambda}{2}\sum_{c,k} w_{ck}^2$. Higher values prevent overfitting by
+shrinking coefficients toward zero. Default $\lambda = 0.01$.
+
+**Feature importance**: derived from the inverse-standardized coefficient
+magnitudes $\|\tilde{\mathbf{w}}_j\|_2$ where
+$\tilde{w}_{cj} = w_{cj} / \sigma_j$, normalized to $[0, 1]$. This accounts
+for the original variable scales.
+
 ### Random Forest
 
 Ensemble of decision trees, each trained on a bootstrap sample with random
-feature subsets.
+feature subsets (via `ml-random-forest`).
 
-**Training** (custom implementation):
-- **trees**: number of trees in the ensemble (default 10).
-- **max depth**: maximum tree depth (default 5).
+**Training**:
+- **nEstimators**: number of trees in the ensemble (default 10).
+- **maxDepth**: maximum tree depth (default 5).
 - Each tree: bootstrap sample (sampling with replacement), random $\sqrt{p}$
-  feature subset at each split.
+feature subset at each split.
 - Split criterion: Gini impurity.
-- Minimum leaf size: 5 observations.
+- Zero-variance columns receive jitter ($10^{-10}$) before training to prevent
+numerical crashes in internal rescaling.
 
 **Prediction**: majority vote across all trees.
 
+**Feature importance**: extracted via the `featureImportance()` method of the
+trained model, which computes mean decrease in Gini impurity across all trees.
+The importance vector is normalized so the maximum is 1.
+
 ### Decision Boundary Visualization
 
-After training, a grid of points is generated over the 2D feature space:
+After training, a grid of synthetic points is generated over the
+$p$-dimensional feature space spanned by all selected predictor variables:
 
-$$x_\text{grid} = \text{linspace}(\min x_1,\, \max x_1,\, \text{res})$$
-$$y_\text{grid} = \text{linspace}(\min x_2,\, \max x_2,\, \text{res})$$
+$$x_j^\text{grid} = \text{linspace}(\min x_j,\, \max x_j,\, \text{res}), \quad j = 1, \ldots, p$$
 
-Each grid point is classified by the trained model. The grid points are added
-to the dataset as **shadow rows** (ghosted, semi-transparent) with their
-predicted paint color, showing the decision regions without affecting the real
-data.
+where $\text{res}$ is the grid resolution parameter. Each grid point is
+classified by the trained model, producing both a predicted class and a
+class probability vector. The **indecision** at each grid point is:
+
+$$\text{indecision}(\mathbf{x}) = 1 - \max_k \, P(\hat{y} = k \mid \mathbf{x})$$
+
+When "Show" is clicked, the boundary grid points are **added to the
+DataFrame** as synthetic rows with ring-glyph shape (shape 6: outlined
+circles). Each grid point's paint color is set to its predicted class,
+and its variable values are filled from the grid coordinates. Non-predictor
+columns receive default values (0 for numeric, first level for categorical).
+
+Because boundary grid points are regular DataFrame rows, they appear in
+**all plot types**: scatterplots, parallel coordinates, scatterplot matrices,
+and tours. During a tour, the boundary points rotate along with the data,
+showing how the decision boundary projects into each 2D view. The decision
+boundary emerges visually where adjacent ring glyphs change color.
+
+Clicking "Hide" removes the boundary rows from the DataFrame, restoring it
+to its original size. The trained model and its diagnostics (confusion matrix,
+accuracy, etc.) are preserved.
+
+Misclassified data points are marked with an X cross (shape 5). The original
+point shapes are saved before classification and restored when the boundary
+points are hidden.
+
+### Confusion Matrix
+
+After training, a confusion matrix is computed. When train/test split is
+enabled, the matrix is computed on the test set; otherwise, it uses the
+training set:
+
+$$C_{ij} = |\{x : y_\text{true}(x) = c_i \wedge \hat{y}(x) = c_j\}|$$
+
+From the confusion matrix, per-class metrics are derived:
+
+| Metric | Formula |
+|--------|---------|
+| Precision | $\frac{C_{ii}}{\sum_j C_{ji}}$ |
+| Recall | $\frac{C_{ii}}{\sum_j C_{ij}}$ |
+| F1 | $2 \cdot \frac{\text{precision} \cdot \text{recall}}{\text{precision} + \text{recall}}$ |
+| Support | $\sum_j C_{ij}$ (row total) |
+
+Overall accuracy: $\text{acc} = \frac{\sum_i C_{ii}}{\sum_{ij} C_{ij}}$.
+
+**Warning**: these metrics are computed on the training set, so they
+overestimate real-world performance. A classifier that memorizes training data
+will show 100% accuracy but may generalize poorly.
+
+### Train/Test Split
+
+When enabled, the labeled data is partitioned into a training set (for fitting
+the model) and a test set (for evaluating accuracy). The split is
+**stratified**: each class contributes the same proportion to both sets,
+preserving class balance.
+
+The train ratio (default 0.8) controls the fraction used for training. With
+train/test split active, the confusion matrix, accuracy, and per-class metrics
+are computed on the **test set** only, giving a more honest estimate of
+generalization performance.
+
+### 5-Fold Cross-Validation
+
+Regardless of whether train/test split is enabled, a stratified 5-fold
+cross-validation is computed automatically on all labeled data. The data is
+split into 5 folds, preserving class proportions. For each fold, the model is
+trained on 4/5 of the data and evaluated on the remaining 1/5. The mean
+accuracy across folds and the per-fold accuracies (with standard deviation)
+are reported in the diagnostics panel.
+
+CV accuracy is more reliable than a single train/test split for small datasets,
+because every observation contributes to both training and evaluation across
+the 5 iterations.
 
 ---
 
@@ -529,6 +802,245 @@ of clusters $k$, which can then be re-applied.
 
 ---
 
+## Scagnostics
+
+Scagnostics (scatterplot diagnostics) [Wilkinson et al. 2005, Tukey & Tukey 1985] compute numerical measures characterizing the distribution of point clouds in a scatterplot. For $p$ variables, all $\binom{p}{2}$ pairwise scatterplots are scored on 9 measures, enabling automatic detection of unusual or interesting variable pairs.
+
+### Graph Structures
+
+For each variable pair $(x, y)$, the following geometric structures are computed:
+
+1. **Delaunay triangulation** via the `delaunator` package, giving the complete set of triangles connecting non-missing points.
+2. **Minimum spanning tree (MST)** from the Delaunay edges using Kruskal's algorithm with union-find.
+3. **Convex hull** via Andrew's monotone chain algorithm.
+4. **Alpha shape area**: total area of Delaunay triangles where all edge lengths are at most the 90th percentile of Delaunay edge lengths.
+
+Tiny deterministic jitter (magnitude $10^{-10} \times \max(\text{range}_x, \text{range}_y)$, based on a multiplicative hash) is added to break ties for Delaunay/hull stability on collinear data.
+
+### Nine Measures
+
+**Outlying**: proportion of MST edge length contributed by outlier edges (length $>$ $Q_{75} + 1.5 \cdot \text{IQR}$):
+
+$$\text{outlying} = \frac{\sum_{e \in \text{outlier edges}} \ell_e}{\sum_{e \in \text{MST}} \ell_e}$$
+
+**Skew**: skewness of the MST edge length distribution, rescaled to $[0, 1]$:
+
+$$\text{skew} = 1 - \frac{1}{1 + \max(0, \gamma)}$$
+
+where $\gamma$ is the sample skewness of MST edge lengths.
+
+**Clumpy** [Wilkinson et al. 2005]: cluster measure. For each MST edge $e$ with weight $w$, remove $e$ and follow only MST edges shorter than $w$ from each endpoint (DFS), counting reachable nodes (runts) and tracking the longest edge (maxLen). The value for that edge is:
+
+$$\text{value}_e = \text{runts} \times \left(1 - \frac{\text{maxLen}}{w}\right)$$
+
+where runts and maxLen come from the smaller subtree. Overall:
+
+$$\text{clumpy} = \frac{2 \cdot \max_e(\text{value}_e)}{n}$$
+
+High clumpy indicates well-separated clusters: the connecting edge is long while within-cluster edges are short.
+
+**Sparse**: based on the ratio of mean MST edge length to expected length under uniformity:
+
+$$\text{sparse} = 1 - \frac{1}{1 + \bar{\ell}_\text{MST} \cdot \sqrt{n / A_\text{hull}}}$$
+
+**Striated**: fraction of adjacent MST edge pairs forming near-parallel paths (angle $>$ 150° between neighboring edges at adjacent MST nodes).
+
+**Convex**: ratio of alpha shape area to total Delaunay area:
+
+$$\text{convex} = \frac{A_\alpha}{A_\text{Delaunay}}$$
+
+**Skinny**: based on the isoperimetric ratio of the convex hull:
+
+$$\text{skinny} = 1 - \frac{4\pi A_\text{hull}}{P_\text{hull}^2}$$
+
+where $P_\text{hull}$ is the hull perimeter. A circle scores 0; a line scores 1.
+
+**Stringy**: fraction of MST nodes with degree $\geq 3$ relative to the maximum possible:
+
+$$\text{stringy} = 1 - \frac{|\{v : \deg(v) \geq 3\}|}{n - 2}$$
+
+**Monotonic**: absolute value of Spearman rank correlation between $x$ and $y$:
+
+$$\text{monotonic} = |r_S(x, y)|$$
+
+### Scagnostics Panel
+
+The Scag tab in the right sidebar lets you:
+- Select variables to compute scagnostics for
+- Sort results by any measure (ascending/descending)
+- Filter pairs by a threshold on any measure
+- View a table of all $\binom{p}{2}$ pairs with bar-chart sparklines
+
+### Scatmat Integration
+
+When scagnostics results exist, the scatterplot matrix highlights cells whose score on the selected filter measure exceeds the threshold. The cell background is tinted with intensity proportional to the score. Hovering over a cell shows the scagnostic score in the tooltip.
+
+---
+
+## Andrews Curves
+
+Andrews curves [Andrews 1972] represent each $p$-dimensional observation $\mathbf{x} = (x_1, x_2, \ldots, x_p)$ as a function of a single parameter $t$:
+
+$$f_{\mathbf{x}}(t) = \frac{x_1}{\sqrt{2}} + x_2 \sin(t) + x_3 \cos(t) + x_4 \sin(2t) + x_5 \cos(2t) + \cdots$$
+
+for $t \in [-\pi, \pi]$. Each observation maps to a curve; observations with similar multivariate structure produce similar curves that cluster together visually.
+
+### Properties
+
+- The mapping preserves means: $\bar{f}_{\mathbf{x}}(t) = f_{\bar{\mathbf{x}}}(t)$
+- The $L^2$ distance between curves equals the Euclidean distance between observations (up to a constant):
+$$\int_{-\pi}^{\pi} (f_{\mathbf{x}}(t) - f_{\mathbf{y}}(t))^2 \, dt = \pi \|\mathbf{x} - \mathbf{y}\|^2$$
+- Outliers appear as isolated curves far from the main cluster
+- Clusters appear as bands of similar curves
+
+### Implementation
+
+The function is evaluated at `resolution` evenly-spaced points across $[-\pi, \pi]$ (default 200). Each observation is drawn as a polyline connecting these values. Line color encodes the current color variable or brushed groups; alpha scales with sample size for large datasets. Brushing and identify tools work as in other plot types.
+
+---
+
+## Conditional Parallel Coordinates
+
+When a **conditional variable** is selected in a parallel coordinates panel, the
+plot is split into horizontal facets — one per level of the conditioning
+categorical variable. Each facet shows only the observations belonging to that
+level, drawn as a standard parallel coordinates panel with its own axis ranges.
+
+### Why conditional parcoords?
+
+Standard parallel coordinates overlay all observations on shared axes. When the
+data contains subgroups, the resulting tangle of crossing lines can be
+unreadable. Conditioning splits the view so each group's profile is visible
+in isolation, while the vertical alignment preserves axis-to-axis comparisons
+across groups.
+
+### Construction
+
+Given a categorical variable $g$ with levels $\ell_1, \ldots, \ell_m$:
+
+1. Partition the $n$ observations into $m$ groups by $g$.
+2. Allocate vertical space: each facet receives height
+   $\lfloor (h - \text{gaps} - \text{labels}) / m \rfloor$.
+3. Within each facet, draw parallel axes and polylines for the group's
+   observations using Canvas2D (not WebGL, to keep facets lightweight).
+4. Label each facet with the level name.
+
+Linked brushing, painting, and identify work across facets as in the standard
+parallel coordinates view.
+
+---
+
+## Concentric Coordinates
+
+Concentric coordinates [Williams & Kovalerchuk 2025] arrange axes as concentric circles (rings) around a shared center instead of parallel vertical axes. Each variable is mapped to a ring radius, with values encoded as angular position along the ring.
+
+### Construction
+
+Given $p$ variables, ring $k$ (for $k = 1, \ldots, p$, innermost to outermost) has mid-radius $r_k$. Each observation $\mathbf{x} = (x_1, x_2, \ldots, x_p)$ is represented as a closed polygon connecting points:
+
+$$P_k = \left(r_k \cos\theta_k,\; r_k \sin\theta_k\right)$$
+
+where the angle $\theta_k$ encodes the normalized value:
+
+$$\theta_k = 2\pi \cdot \frac{x_k - \min_k}{\max_k - \min_k} - \frac{\pi}{2}$$
+
+The $-\pi/2$ offset places the minimum at the top (12 o'clock position).
+
+### Lossless Property
+
+Unlike parallel coordinates, which lose information when lines from different axes cross, concentric coordinates are a **lossless** representation in the General Line Coordinate (GLC) framework: each observation's polygon uniquely determines the original values because the ring-to-ring mapping preserves the encoding.
+
+### Implementation
+
+Each ring is drawn as a circle at its mid-radius. Variable labels appear above the outermost ring. Each observation is rendered as a closed polygon (for $p \geq 3$) or a line (for $p = 2$) connecting the angular positions on each ring. Color, alpha, brushing, and identify tools work identically to parallel coordinates.
+
+---
+
+## Mapper (Topological Data Analysis)
+
+The Mapper construction [Singh et al. 2007] is a tool from topological data analysis (TDA) that summarizes the shape of high-dimensional data as a graph (network). Unlike dimensionality reduction, Mapper preserves multi-scale structure by combining overlapping local views of the data.
+
+### Algorithm
+
+Given $n$ observations in $p$ dimensions, Mapper proceeds in three stages:
+
+**1. Filter (lens) function**: map each observation $\mathbf{x}_i$ to a real-valued filter value $f(\mathbf{x}_i) \in \mathbb{R}$. Available filters:
+
+- **Variable**: use the value of a selected data variable directly.
+- **PCA 1**: score on the first principal component — the direction of maximum variance in the selected variables:
+
+$$f(\mathbf{x}_i) = \mathbf{e}_1^\top (\mathbf{x}_i - \bar{\mathbf{x}})$$
+
+where $\mathbf{e}_1$ is the leading eigenvector of the covariance matrix and $\bar{\mathbf{x}}$ is the mean vector.
+
+- **PCA 2**: score on the second principal component — the direction of second-most variance, orthogonal to $\mathbf{e}_1$:
+
+$$f(\mathbf{x}_i) = \mathbf{e}_2^\top (\mathbf{x}_i - \bar{\mathbf{x}})$$
+
+- **PCA residual**: reconstruction error from a 2-component PCA, measuring how poorly a point is described by the best 2D linear approximation:
+
+$$f(\mathbf{x}_i) = \|\mathbf{x}_i - \hat{\mathbf{x}}_i\|, \quad \hat{\mathbf{x}}_i = \bar{\mathbf{x}} + \sum_{c=1}^{2} (\mathbf{e}_c^\top (\mathbf{x}_i - \bar{\mathbf{x}}))\,\mathbf{e}_c$$
+
+Points with high residual values are outliers or lie on non-linear structures that PCA cannot capture. This lens is particularly useful for detecting anomalies [Chalapathy & Chawla 2019].
+
+- **Eccentricity**: the $L_2$ distance from each point to its farthest point:
+
+$$f(\mathbf{x}_i) = \max_{j} \|\mathbf{x}_i - \mathbf{x}_j\|_2$$
+
+- **Density**: Gaussian kernel density estimate evaluated at each point:
+
+$$f(\mathbf{x}_i) = \frac{1}{|\mathcal{R}|}\sum_{j \in \mathcal{R}} \exp\!\left(-\frac{\|\mathbf{x}_i - \mathbf{x}_j\|^2}{2h^2}\right)$$
+
+where $\mathcal{R}$ is a reference set (subsampled to at most 2000 points) and $h = 1$.
+
+**2. Overlapping intervals**: the range of filter values $[\min f, \max f]$ is divided into $n_\text{int}$ intervals of equal width, each overlapping its neighbors by a fraction $\delta \in [0, 0.9)$. For interval width $w$ and overlap $\delta$, the step between interval starts is $s = w(1 - \delta)$. Points may belong to multiple intervals.
+
+**3. Partial clustering**: within each interval, points are clustered using k-means++ (with $k$ clusters). Clusters from different intervals that share points are connected by edges, forming the Mapper graph.
+
+$$G = (V, E), \quad V = \{c_{i,j}\}, \quad E = \{(c_{i,j}, c_{i',j'}) : c_{i,j} \cap c_{i',j'} \ne \emptyset\}$$
+
+where $c_{i,j}$ is cluster $j$ within interval $i$.
+
+### Graph Layout
+
+The Mapper graph is visualized using force-directed layout [Fruchterman & Reingold 1991]:
+
+- **Repulsive force** between all node pairs: $F_r = C_r / d^2$ (with $C_r = 800$)
+- **Attractive force** along edges: $F_a = C_a \cdot d$ (with $C_a = 0.01$)
+- **Damping**: velocity multiplied by 0.9 each iteration
+- **Iterations**: 50
+
+Node radius is proportional to cluster size (4–16 px). Edge width scales with the number of shared rows between connected clusters.
+
+### Interaction
+
+- **Node selection**: clicking a node selects all data rows in that cluster, updating the selection mask across all linked views.
+- **Node detail view**: selecting a node shows a detail panel with:
+  - **Connection summary**: number of edges, total shared rows with neighbors, count of distinct neighbor nodes.
+  - **Variable summary table**: per-variable mean, standard deviation, min, and max within the node. These are pre-computed during Mapper construction and stored in each node's `stats` record (keys: `varName` for mean, `_sd_varName` for SD, `_min_varName`, `_max_varName`).
+- **Color by**: nodes can be colored by size (`_count`) or by the mean value of any selected variable within the cluster.
+
+### Parameters
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| Filter | variable | variable, pca1, pca2, residual, eccentricity, density | Lens function |
+| Filter variable | (first) | any numeric | Variable for "variable" filter |
+| Intervals | 10 | 2–50 | Number of overlapping intervals |
+| Overlap | 0.5 | 0–0.9 | Fractional overlap between intervals |
+| Clusters | 3 | 2–10 | k-means clusters per interval |
+
+### Topological Interpretation
+
+The Mapper graph reveals topological features of the data manifold [Carlsson 2009]:
+
+- **Connected components**: disconnected subgraphs correspond to distinct data clusters
+- **Loops (cycles)**: indicate circular or toroidal structure in the data
+- **Branches (flares)**: indicate data extending in different directions from a central core
+- **Node size variation**: large nodes in narrow regions suggest concentration points or critical transitions
+
+---
+
 ## References
 
 1. Asimov, D. (1985). The grand tour: a tool for viewing multidimensional data. *SIAM Journal on Scientific and Statistical Computing*, 6(1), 128–143.
@@ -541,14 +1053,40 @@ of clusters $k$, which can then be re-applied.
 
 5. Cook, D., Swayne, D. F., & Buja, A. (2007). *Interactive and Dynamic Graphics for Data Analysis*. Springer.
 
-6. Hyvärinen, A. (1999). Fast and robust fixed-point algorithms for independent component analysis. *IEEE Transactions on Neural Networks*, 10(3), 626–634.
+6. Ester, M., Kriegel, H.-P., Sander, J., & Xu, X. (1996). A density-based algorithm for discovering clusters in large spatial databases with noise. *Proceedings of KDD*, 226–231.
 
-7. Jolliffe, I. T. (2002). *Principal Component Analysis*. 2nd ed. Springer.
+7. Harrison, G. (2023). langevitour: smooth touring high-dimensional data with Langevin dynamics. *The R Journal*, 15(2), 208–221.
 
-8. Kruskal, J. B. (1964). Multidimensional scaling by optimizing goodness of fit to a nonmetric hypothesis. *Psychometrika*, 29(1), 1–27.
+8. Hyvärinen, A. (1999). Fast and robust fixed-point algorithms for independent component analysis. *IEEE Transactions on Neural Networks*, 10(3), 626–634.
 
-9. Lorensen, W. E. & Cline, H. E. (1987). Marching cubes: a high resolution 3D surface construction algorithm. *ACM SIGGRAPH Computer Graphics*, 21(4), 163–169.
+9. Jolliffe, I. T. (2002). *Principal Component Analysis*. 2nd ed. Springer.
 
-10. van der Maaten, L. & Hinton, G. (2008). Visualizing data using t-SNE. *Journal of Machine Learning Research*, 9, 2579–2605.
+10. Kruskal, J. B. (1964). Multidimensional scaling by optimizing goodness of fit to a nonmetric hypothesis. *Psychometrika*, 29(1), 1–27.
 
-11. McInnes, L., Healy, J., & Melville, J. (2020). UMAP: uniform manifold approximation and projection for dimension reduction. *Open Journal of Statistics*, 10(3), 683–711.
+11. Lekschas, B. & Abdennur, N. (2026). dtour: a steerable tour de vis through high-dimensional data. arXiv:2605.04306.
+
+12. Lorensen, W. E. & Cline, H. E. (1987). Marching cubes: a high resolution 3D surface construction algorithm. *ACM SIGGRAPH Computer Graphics*, 21(4), 163–169.
+
+13. van der Maaten, L. & Hinton, G. (2008). Visualizing data using t-SNE. *Journal of Machine Learning Research*, 9, 2579–2605.
+
+14. McInnes, L., Healy, J., & Melville, J. (2020). UMAP: uniform manifold approximation and projection for dimension reduction. *Open Journal of Statistics*, 10(3), 683–711.
+
+15. Rousseeuw, P. J. (1987). Silhouettes: a graphical aid to the interpretation and validation of cluster analysis. *Journal of Computational and Applied Mathematics*, 20, 53–65.
+
+16. Wilkinson, L., Anand, A., & Grossman, R. (2005). Graph-theoretic scagnostics. *Proceedings of the IEEE Symposium on Information Visualization*, 157–164.
+
+17. Tukey, J. W. & Tukey, P. A. (1985). Computer graphics and exploratory data analysis: an introduction. In *Proceedings of the Sixteenth Symposium on the Interface*, 740–755.
+
+18. Andrews, D. F. (1972). Plots of high-dimensional data. *Biometrics*, 28(1), 125–136.
+
+19. Williams, S. & Kovalerchuk, B. (2025). High-dimensional data classification in concentric coordinates. arXiv:2507.18450.
+
+20. Singh, G., Mémoli, F., & Carlsson, G. (2007). Topological methods for the analysis of high dimensional data sets and 3D object recognition. *Eurographics Symposium on Point-Based Graphics*, 91–100.
+
+21. Carlsson, G. (2009). Topology and data. *Bulletin of the American Mathematical Society*, 46(2), 255–308.
+
+22. Fruchterman, T. M. J. & Reingold, E. M. (1991). Graph drawing by force-directed placement. *Software: Practice and Experience*, 21(11), 1129–1164.
+
+23. Venna, J. & Kaski, S. (2006). Local multidimensional scaling. *Neural Networks*, 19(6–7), 889–899.
+
+24. Chalapathy, R. & Chawla, S. (2019). Deep learning for anomaly detection: a survey. *arXiv preprint arXiv:1901.03407*.

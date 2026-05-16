@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { loadDatasetFile, loadDatasetUrl, type LoadedData } from "@/app/loadFile";
+import { LessonPicker } from "@/app/LessonPicker";
 
 export interface EmptyStateProps {
   onLoaded: (data: LoadedData) => void;
@@ -67,8 +68,9 @@ export function EmptyState({ onLoaded }: EmptyStateProps) {
             <button key={s.label} onClick={() => void handleSample(s.url)}>{s.label}</button>
           ))}
         </div>
-        {err && <div className="err" role="alert">{err}</div>}
-      </div>
+      {err && <div className="err" role="alert">{err}</div>}
+      <LessonPicker />
+    </div>
     </div>
   );
 }

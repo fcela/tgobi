@@ -9,6 +9,10 @@ import { Parcoords } from "@/plots/parcoords/Parcoords";
 import { MissingPattern } from "@/plots/missing/MissingPattern";
 import { Timeseries } from "@/plots/timeseries/Timeseries";
 import { Scatter3D } from "@/plots/scatter3d/Scatter3D";
+import { Boxplot } from "@/plots/boxplot/Boxplot";
+import { Andrews } from "@/plots/andrews/Andrews";
+import { ConcentricCoords } from "@/plots/concentric/ConcentricCoords";
+import { MapperRenderer } from "@/plots/mapper/MapperRenderer";
 
 interface TileLeafProps {
   node: TileLeafType;
@@ -111,6 +115,10 @@ function panelLabel(panel: PlotPanel): string {
   if (panel.kind === "parcoords") return `parcoords(${panel.variables.length})`;
   if (panel.kind === "timeseries") return `${panel.x} → ${panel.y.join(",")}`;
   if (panel.kind === "scatter3d") return `${panel.x} × ${panel.y} × ${panel.z}`;
+  if (panel.kind === "boxplot") return `box: ${panel.variable}`;
+  if (panel.kind === "andrews") return `andrews(${panel.variables.length})`;
+  if (panel.kind === "concentric") return `concentric(${panel.variables.length})`;
+  if (panel.kind === "mapper") return "mapper";
   return "missing pattern";
 }
 
@@ -146,5 +154,13 @@ function renderPanel(panel: PlotPanel) {
       return <Timeseries panel={panel} />;
     case "scatter3d":
       return <Scatter3D panel={panel} />;
+    case "boxplot":
+      return <Boxplot panel={panel} />;
+    case "andrews":
+      return <Andrews panel={panel} />;
+    case "concentric":
+      return <ConcentricCoords panel={panel} />;
+    case "mapper":
+      return <MapperRenderer panel={panel} />;
   }
 }

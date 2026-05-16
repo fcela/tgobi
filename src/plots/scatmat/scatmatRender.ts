@@ -150,6 +150,12 @@ export interface ScatmatEdgeOverlay {
   edgeMask?: Uint8Array;
 }
 
+export interface ScatmatScagHighlight {
+  measure: string;
+  scores: Map<string, number>;
+  threshold: number;
+}
+
 /**
  * Draw one off-diagonal cell (i, j) of the scatmat onto ctx.
  *
@@ -166,8 +172,23 @@ export function drawCell(
   visual: VisualState,
   activeBrush: BrushOverlay | null,
   edgeOverlay: ScatmatEdgeOverlay | null = null,
+  scagHighlight: ScatmatScagHighlight | null = null,
+  xVar?: string,
+  yVar?: string,
 ): void {
   const ir = innerRect(cell);
+
+  // scagnostic background highlight
+  if (scagHighlight && xVar && yVar) {
+    const key1 = `${xVar},${yVar}`;
+    const key2 = `${yVar},${xVar}`;
+    const score = scagHighlight.scores.get(key1) ?? scagHighlight.scores.get(key2) ?? 0;
+    if (score >= scagHighlight.threshold) {
+      const intensity = (score - scagHighlight.threshold) / Math.max(0.01, 1 - scagHighlight.threshold);
+      ctx.fillStyle = `rgba(102,204,255,${0.04 + 0.12 * intensity})`;
+      ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+    }
+  }
 
   // frame
   ctx.strokeStyle = "#2a2a2a";

@@ -48,17 +48,6 @@ export interface HullOverlay {
   }>;
 }
 
-export interface ContourOverlay {
-  grid: Float64Array;
-  paint: Uint8Array;
-  resolution: number;
-  nVars: number;
-  mins: Float64Array;
-  maxs: Float64Array;
-  paintPalette: ReadonlyArray<string>;
-  alpha: number;
-}
-
 export interface DensityOverlay {
   contours: ReadonlyArray<{
     paths: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>;
@@ -111,7 +100,6 @@ export interface ScatterRenderer {
     activeBrush: BrushOverlay | null,
     edgeOverlay?: EdgeOverlay | null,
     hullOverlay?: HullOverlay | null,
-    contourOverlay?: ContourOverlay | null,
     densityOverlay?: DensityOverlay | null,
     biplotOverlay?: BiplotOverlay | null,
     rugOverlay?: RugOverlay | null,
