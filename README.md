@@ -90,6 +90,8 @@ The bundled samples are useful for quick checks:
 - **places**: mixed geographic and numeric data.
 - **cycle**: XML sample for GGobi import coverage.
 - **large**: synthetic large dataset for performance testing.
+- **missing**: dataset with missing values for imputation demos.
+- **synthetic-large**: synthetic data for scagnostics and clustering demos.
 
 ## Using The App
 
@@ -100,13 +102,17 @@ Add plots with **+ Plot**. Supported plot types:
 | Type | Description |
 |------|-------------|
 | Scatterplot | Two numeric variables, x-y |
+| 3D scatterplot | Three numeric variables, x-y-z with camera rotation (available but parked from default UI) |
 | Scatterplot matrix | 2-8 numeric variables, all pairwise scatterplots |
-| Parallel coordinates | 2+ numeric variables, linked axes |
-| Dotplot | Single numeric variable, 1D strip |
+| Parallel coordinates | 2+ numeric variables, linked axes; optionally conditioned by a categorical variable |
 | Barchart | Single variable (categorical or numeric), frequency counts |
+| Dotplot | Single numeric variable, 1D strip |
 | Boxplot | Single numeric variable with optional grouping; shows median, quartiles, whiskers, outliers |
 | Time series | Numeric x-axis, one or more y variables with optional grouping |
+| Andrews curves | Multivariate Fourier curves, one per observation |
+| Concentric coordinates | Radial axis layout, one ring per variable |
 | Missing pattern | Overview of missingness across all variables |
+| Mapper graph | TDA Mapper network, nodes = clustered intervals, edges = shared rows |
 
 Multiple plots are linked: selecting, painting, or hovering in one plot
 highlights the same rows in every other plot.
@@ -116,8 +122,10 @@ highlights the same rows in every other plot.
 Use the brush toolbar to select rows:
 
 - **Transient**: selection disappears when you release the mouse.
-- **Persistent**: each brush stroke paints a group with a distinct color (paint
-  groups 1-8).
+- **Persistent**: each brush stroke paints a group with a distinct color
+  (brushed groups 1-8).
+
+Brush shapes: rectangle, ellipse, or lasso.
 
 The selection toolbar offers:
 
@@ -164,7 +172,7 @@ olive oil dataset):
 The color toolbar controls how points are colored:
 
 - **Fixed**: all points in one color.
-- **Paint**: color by painted group (persistent brushing).
+- **Brushed groups**: color by painted group (persistent brushing).
 - **By variable**: color by a data column. Categorical variables pair well with
   `tableau10`; numeric variables support sequential or diverging scales.
 
@@ -197,7 +205,7 @@ Click **Export CSV** in the toolbar to download the current dataset as a CSV
 file. The export respects the current view:
 
 - **Visible only**: by default, excluded (shadowed) rows are omitted.
-- **Paint groups**: appends a `_paint_group` column when rows have been painted.
+- **Brushed groups**: appends a `_paint_group` column when rows have been painted.
 - **Cluster labels**: appends a `_cluster` column when clustering has been
   applied.
 
@@ -209,8 +217,39 @@ connect rows in dataset order.
 
 ### Hulls
 
-Toggle convex hulls per paint group or color group to visually enclose clusters
+Toggle convex hulls per brushed group or color group to visually enclose clusters
 in scatterplots.
+
+### Variable Transforms
+
+Right-click a variable in the left sidebar to derive a transformed column:
+
+| Transform | Description |
+|-----------|-------------|
+| log | Natural logarithm |
+| sqrt | Square root |
+| rank | Rank transform (average ties) |
+| negate | Multiply by -1 |
+| power | Custom exponent |
+| jitter | Add small random noise |
+| standardize | z-score (mean 0, sd 1) |
+| miss_ind | Binary indicator for missingness |
+| impute_fixed | Replace missing with a constant |
+| impute_rand | Replace missing with a random observed value |
+| impute_cond | Replace missing conditional on a categorical variable |
+
+**Scaling**: each variable can also be scaled independently (raw, 0-1 range,
+z-score, or robust/IQR-based) without creating a new column.
+
+**Sphering**: the "Sphere" button derives spherical coordinate columns
+(theta, phi, r) from selected Cartesian x/y/z variables.
+
+### Missing Data
+
+The **Missing pattern** plot shows a heatmap of missingness across all variables
+and rows (black = present, colored = missing). The missing-data panel controls
+imputation method, fixed value, seed, and conditioning variable. Multiple
+imputation sets can be cycled through to visualize imputation uncertainty.
 
 ---
 
@@ -229,7 +268,7 @@ tour) or dotplot (1D tour) to be open.
 - **2D (scatter)**: rotates a 2D projection plane through p-dimensional space.
 - **1D (dotplot)**: rotates a 1D projection direction.
 - **Correlation (2x1D)**: two *independent* 1D projections of two disjoint
-  variable sets — one drives the X axis of a scatterplot, the other drives
+  variable sets --- one drives the X axis of a scatterplot, the other drives
   Y. Useful when you want to ask "does a 1D projection of one block of
   variables correlate with a 1D projection of another?" The variable list
   is split (first half → X-set, second half → Y-set); each set rotates
@@ -242,6 +281,8 @@ tour) or dotplot (1D tour) to be open.
 | Grand | Randomly walks through all projection planes. Good for overview. |
 | Projection pursuit | Steers the tour toward projections that optimize an index. |
 | Manual | Fixes all variables except one, letting you scrub that variable's contribution with a slider. |
+| Guided | Define a sequence of keyframe projections, then smoothly interpolate between them using Catmull-Rom splines. A scrubber slider gives arc-length-parameterized reversible playback. |
+| Langevin | Stochastic tour with configurable step size and diffusion temperature. Spends more time near interesting projections while maintaining exploration. |
 
 **Projection pursuit goals**:
 
@@ -249,7 +290,7 @@ tour) or dotplot (1D tour) to be open.
 |------|-----------|-------------|
 | Holes | 1 - central density | Finding projections with hollow structure (clusters on the rim) |
 | Central mass | Central density | Finding projections with dense centers |
-| LDA | Between-class / within-class variance | Requires 2+ painted groups; finds projections that separate groups |
+| LDA | Between-class / within-class variance | Requires 2+ brushed groups or a categorical class variable; finds projections that separate groups |
 | PCA variance | Total variance in projection | Finds projections that spread data out most |
 | Kurtosis | Absolute excess kurtosis | Finding heavy-tailed or multi-modal structure |
 
@@ -258,6 +299,14 @@ unit circle. Frozen variables hold their direction while others rotate.
 
 **Saved views**: click **Save** to bookmark the current projection. Click a
 saved view to restore it.
+
+**Keyframe gallery**: in guided mode, save keyframes and see thumbnail previews.
+The scrubber slider interpolates along Catmull-Rom splines with arc-length
+parameterization for perceptually uniform speed.
+
+**PP score trace**: a sparkline at the bottom of the tour panel shows the
+projection pursuit index value over time, so you can see when the tour finds
+interesting projections.
 
 ### Project Tab
 
@@ -286,6 +335,9 @@ columns.
 - **Add to data**: materializes the embedding as new columns (e.g. `PCA.1`,
   `PCA.2`) and opens a scatterplot.
 - **Clear**: resets the projection.
+- **Compare DR**: computes all 5 methods at once, Procrustes-aligns them to
+  the PCA reference, and displays a morphing animation that interpolates
+  between the embeddings so you can see structural differences.
 
 **Component information**:
 
@@ -299,6 +351,11 @@ For MDS, t-SNE, and UMAP, a **variable importance** table ranks variables by
 how much the embedding changes when that variable is permuted (permutation
 importance, 3 repetitions). This identifies which variables most influence the
 nonlinear structure.
+
+**Quality metrics**: after any projection, trustworthiness and continuity
+scores (Venna & Kaski 2006) and a Shepard diagram are computed automatically.
+These quantify how faithfully the embedding preserves original-space
+neighborhoods.
 
 See [Methods Guide](docs/methods.md) for the mathematical details.
 
@@ -327,16 +384,21 @@ Assign cluster labels to rows and paint them with distinct colors.
 X-Means iterates k = 1..kMax and picks the best k by Bayesian Information
 Criterion. OPTICS extracts clusters using the xi steepness parameter.
 
+**Diagnostics**: after clustering, the panel shows silhouette scores (overall
+and per-cluster), a dendrogram with draggable cut line (hierarchical), a
+reachability plot (OPTICS), and a k-distance plot (DBSCAN/OPTICS) to help
+select eps.
+
 ### Classify Tab
 
-Build a classifier from painted groups and visualize the decision boundary
-in any plot --- including animated tours. Inspired by R's
+Build a classifier from brushed groups or a categorical variable and visualize
+the decision boundary in any plot --- including animated tours. Inspired by R's
 [classifly](https://cran.r-project.org/package=classifly) package: instead of
-shading regions, tgobi samples the predictor space on a grid, asks the
-trained model what it would predict at each grid point, and keeps only those
-grid points where the prediction *changes between neighbors* (the
-neighbor-disagreement rule). Those boundary points are rendered as outline
-rings, colored by their predicted class.
+shading regions, tgobi samples the predictor space on a grid, asks the trained
+model what it would predict at each grid point, and keeps only those grid points
+where the prediction *changes between neighbors* (the neighbor-disagreement
+rule). Those boundary points are rendered as outline rings, colored by their
+predicted class.
 
 **Methods**:
 
@@ -350,19 +412,22 @@ rings, colored by their predicted class.
 All four methods return calibrated per-class probabilities that drive the
 **Uncertainty** filter.
 
+**Class source**: choose **Brushed groups** to train on persistent-brush paint
+colors, or pick a **categorical variable** from the data as class labels.
+
 **Workflow**:
 1. **Brush** 2+ groups of points (persistent mode) --- these become the
-   training labels. Alternatively, set **Class** to a categorical variable
-   in the data.
+  training labels. Alternatively, set **Class** to a categorical variable
+  in the data.
 2. **Check** the numeric variables you want the model to use.
 3. **Boundary** mode: choose either *2D slice* (grid varies only along the
-   first 2 selected variables, others held at their training-set medians)
-   or *Full space* (grid varies along every predictor). Full-space grids
-   stay tour-meaningful in any projection but the point count grows as
-   `resolution^p`; tgobi caps the total at 200 000 and shows the effective
-   resolution next to the input.
+  first 2 selected variables, others held at their training-set medians) or
+  *Full space* (grid varies along every predictor). Full-space grids stay
+  tour-meaningful in any projection but the point count grows as
+  `resolution^p`; tgobi caps the total at 200 000 and shows the effective
+  resolution next to the input.
 4. Pick the **Grid** resolution. The label next to it shows the projected
-   point count, e.g. `5×5 = 25 pts` or `7⁶ = 117 649 pts (capped from 15)`.
+  point count, e.g. `5x5 = 25 pts` or `7^6 = 117 649 pts (capped from 15)`.
 5. Click **Train**, then **Show** to draw the boundary rings.
 
 **Uncertainty filter** (slider): each boundary point also carries the
@@ -370,16 +435,15 @@ classifier's `1 - max(class probability)` at that location. Drag the slider
 to hide confident points and keep only the uncertain ones. A live
 *N of M shown* counter ticks down as you raise the threshold.
 
-**Misclassified** training points render as an X-cross over their painted
+**Misclassified** training points render as an X-cross over their brushed
 glyph, so you can see at a glance which examples the model disagrees with.
 
-**Where boundaries appear**:
-
-The boundary is an *overlay layer*, not synthetic data rows. It draws in
-scatter and scatterplot-matrix plots whose axes are predictors, and in a
-running 2D tour over the same (or a superset of the) predictor variables.
-It does **not** appear in the missing-pattern view, parallel coordinates,
-boxplots, or CSV export --- those views see the original data unchanged.
+**Where boundaries appear**: boundary rings are an overlay layer, not synthetic
+data rows. They draw in scatter and scatterplot-matrix plots whose axes are
+predictors, and in a running 2D tour over the same (or a superset of the)
+predictor variables. They do **not** appear in the missing-pattern view,
+parallel coordinates, boxplots, or CSV export --- those views see the original
+data unchanged.
 
 In a tour, the boundary grid is standardized the same way the tour worker
 standardizes the data and then multiplied by the active basis, so the rings
@@ -389,8 +453,96 @@ is 0).
 
 **Train/test split** (optional): when enabled, the labeled data is split
 stratified by class. The diagnostics panel reports test-set accuracy and a
-5-fold cross-validation estimate alongside the training-set confusion
-matrix.
+5-fold cross-validation estimate alongside the training-set confusion matrix.
+
+### Scag Tab (Scagnostics)
+
+Compute nine scatterplot diagnostic measures over all variable pairs:
+
+Outlying, Skew, Clumpy, Sparse, Striated, Convex, Skinny, Stringy, Monotonic.
+
+**Controls**:
+- Select variables to include.
+- **Sort** results by any measure (ascending/descending).
+- **Filter** pairs by a threshold on any measure.
+- **Reorder scatmat**: when results exist, the scatterplot matrix can be
+  reordered so that the highest-scoring pairs are clustered together.
+- **Open top pair**: add a scatterplot of the top-ranked variable pair.
+- **Seed tour**: open a scatterplot and start a 2D tour on the top-ranked pair.
+
+Computation runs in a web worker for smooth UI.
+
+### Mapper Tab (Topological Data Analysis)
+
+Build a Mapper graph from the data --- a network that summarizes the shape of
+high-dimensional structure through overlapping local views.
+
+**Filter (lens) functions**:
+
+| Lens | Description |
+|------|-------------|
+| Variable | Use a data variable directly |
+| PCA 1 | First principal component score |
+| PCA 2 | Second principal component score |
+| PCA residual | Reconstruction error from 2-component PCA |
+| Eccentricity | L2 distance to farthest point |
+| Density | Gaussian kernel density estimate |
+
+**Parameters**:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Intervals | 10 | Number of overlapping bins along the filter |
+| Overlap | 0.5 | Fractional overlap between intervals |
+| Clustering | k-means | Method used within each interval (k-means, hierarchical, or DBSCAN) |
+| Cluster k | 3 | Number of clusters per interval (k-means/hierarchical) |
+
+**After computing**:
+- **Mapper** plot type: a first-class plot panel with force-directed node-link
+  layout, pan/zoom, and hover tooltips. Node size encodes cluster membership
+  count; edge width encodes shared-row count.
+- **Node selection**: clicking a node selects all data rows in that cluster,
+  updating the selection mask across all linked views.
+- **Node detail view**: shows connection summary and per-variable statistics
+  (mean, sd, min, max) within the selected node.
+- **Color by**: nodes colored by size or by the mean value of any variable.
+- **Parameter sweep**: compute a grid of (intervals x overlap) combinations and
+  display nodes/edges/components/modularity for each, helping you find stable
+  parameter choices. Runs in a web worker.
+
+---
+
+## Session Save/Load
+
+Click **Save Session** to download the entire app state (data + configuration)
+as a JSON file. Click **Open Session** to restore it. The session preserves:
+
+- Loaded data and column types
+- Variable specs (include/exclude, scaling, groups)
+- Selection state (paint, shape, shadow)
+- Tour, clustering, classification, projection, scagnostics, and mapper
+  parameters
+
+Computed results (embeddings, cluster assignments, boundary grids, scagnostic
+scores, mapper graphs) are not saved --- they must be re-run after loading a
+session. Open plot panels and tour saved views/keyframes are also not
+currently persisted.
+
+## Guided Lessons
+
+tgobi includes interactive step-by-step tutorials. Click **Lessons** to start
+one:
+
+- **Brushing & Tours with Flea Beetles**: linked brushing, color encoding,
+  grand tour, and projection pursuit.
+- **LDA & Classification with Olive Oils**: painting groups, LDA tour,
+  classification, and decision boundaries.
+- **Missing Data & Imputation Uncertainty**: missing pattern plots, imputation
+  methods, and cycling through multiple imputations.
+- **Scagnostics & Clustering on Synthetic Data**: scagnostic measures,
+  scatterplot matrix reordering, and clustering.
+
+Each lesson loads the appropriate sample dataset automatically.
 
 ---
 
@@ -399,6 +551,11 @@ matrix.
 See [docs/methods.md](docs/methods.md) for the mathematical foundations of each
 algorithm, key equations, and implementation notes.
 
+## Post-GGobi Roadmap
+
+See [docs/post-ggobi-roadmap.md](docs/post-ggobi-roadmap.md) for a survey of
+advances since the GGobi era and their implementation status in tgobi.
+
 ## Embed In React
 
 ```tsx
@@ -406,11 +563,11 @@ import { Tgobi } from "tgobi";
 import "tgobi/styles.css";
 
 export function MyPage() {
-  return (
-    <div style={{ height: "100vh" }}>
-      <Tgobi />
-    </div>
-  );
+return (
+<div style={{ height: "100vh" }}>
+    <Tgobi />
+</div>
+);
 }
 ```
 

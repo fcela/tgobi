@@ -15,19 +15,19 @@ high-dimensional data," arXiv:2605.04306, 2026.
 **Key innovations**:
 
 - **Keyframe gallery**: static projection previews surrounding the central
-scatter, giving an overview before committing to a path.
+  scatter, giving an overview before committing to a path.
 - **Reversible scrubbing**: a circular slider for arc-length-parameterized
-traversal along continuous geodesic projection paths.
+  traversal along continuous geodesic projection paths.
 - **Catmull-Rom spline interpolation** with Gram-Schmidt re-orthonormalization:
-$C^1$-continuous, avoids velocity discontinuities.
+  $C^1$-continuous, avoids velocity discontinuities.
 - **Arc-length parameterization**: precomputed cumulative arc-length table with
-$O(\log n)$ binary search at runtime.
+  $O(\log n)$ binary search at runtime.
 - **Geodesic distance**: measured via principal angles from the SVD of
-$\mathbf{F}_a^\top \mathbf{F}_z$.
+  $\mathbf{F}_a^\top \mathbf{F}_z$.
 - **Manual tour with dimension-axis handles**: draggable handles encode each
-dimension's current contribution.
+  dimension's current contribution.
 - **Sequential embedding tours**: compare DR methods by interpolating between
-aligned 2D embeddings.
+  aligned 2D embeddings.
 - **GPU-accelerated rendering**: WebGPU/WebGL with OffscreenCanvas.
 
 **Status in tgobi**: Partially implemented.
@@ -38,7 +38,7 @@ aligned 2D embeddings.
 - ✅ Keyframe gallery with thumbnails
 - ✅ Reversible scrubber slider
 - ✅ Manual tour with variable contribution slider
-- ✅ DR comparison (Procrustes-aligned keyframe tour)
+- ✅ DR comparison (Procrustes-aligned embedding morphs)
 - ✅ PP score trace sparkline
 - ❌ Static projection previews in the gallery
 - ❌ Attraction-repulsion spectrum tour
@@ -72,18 +72,18 @@ scagnostics," Proc. IEEE InfoVis 2005.
 **Recent work**: Wanniarachchi & Talagala, "scatteR: Generating instance space
 based on scagnostics," arXiv:2209.06682, 2022.
 
-**Status in tgobi**: ✅ Implemented.
+**Status in tgobi**: ✅ Fully implemented.
 
 - Nine scagnostic measures computed from Delaunay triangulation
 - Sort and filter by measure
 - Scatmat highlighting by threshold
+- Scatmat reordering by selected measure
+- "Open top pair" and "Seed tour" actions
 - Scagnostics panel in right sidebar
+- ✅ Computation runs in a web worker
 
 **Remaining work**:
 
-- ❌ Move computation to a web worker
-- ❌ Reorder scatmat cells by selected measure
-- ❌ "Open top pair" / "Make tour seed" actions
 - ❌ Stability estimates through subsampling
 
 **References**: Wilkinson, Anand, & Grossman 2005, Wanniarachchi & Talagala 2022.
@@ -96,7 +96,7 @@ based on scagnostics," arXiv:2209.06682, 2022.
 Scalable, Extendable, and Interactive Toolbox for the Visual Exploration of
 High-Dimensional Data," arXiv:2011.03209, 2020.
 
-**Status in tgobi**: ✅ Implemented (basic).
+**Status in tgobi**: ✅ Fully implemented.
 
 - Mapper panel in right sidebar
 - Variable, PCA1, PCA2, residual, eccentricity, and density lenses
@@ -104,14 +104,18 @@ High-Dimensional Data," arXiv:2011.03209, 2020.
 - Linked selection (click node → select rows)
 - Adjustable intervals, overlap, cluster count
 - Node detail view: connection summary, variable statistics (mean, sd, min, max)
-
-**Remaining work**:
-
 - ✅ Full plot-panel Mapper view (zoom, pan, hover, linked selection)
 - ✅ Additional lens choices (PCA1, PCA2, residual, density, eccentricity)
 - ✅ Node detail views (overlap rows, variable summaries)
-- ❌ Clustering choices inside intervals
-- ✅ Parameter sweep and graph stability (5x5 interval×overlap heatmap with nodes/edges/components/avg degree/modularity)
+- ✅ Clustering choices inside intervals (k-means, hierarchical, DBSCAN)
+- ✅ Parameter sweep and graph stability (interval×overlap heatmap with
+  nodes/edges/components/modularity)
+- ✅ Computation runs in a web worker
+
+**Remaining work**:
+
+- ❌ 2D filter functions (e.g., PCA1 × PCA2) for more complex topologies
+- ❌ Coloring nodes by statistical divergence from neighbors
 
 **References**: Zhou et al. 2020, Singh, Mémoli, & Carlsson 2007.
 
@@ -182,23 +186,25 @@ displays, Becker & Cleveland 1996).
 
 ---
 
-### 9. DR Validation via Sequential Embedding Tours
+### 9. DR Validation via Embedding Morphs
 
-**Status in tgobi**: ✅ Implemented (basic).
+**Status in tgobi**: ✅ Implemented.
 
-- DR comparison computes multiple embeddings
-- Procrustes alignment and keyframe tour
-- Guided tour interpolation between aligned layouts
+The DR comparison feature computes all 5 projection methods (PCA, MDS, ICA,
+t-SNE, UMAP), Procrustes-aligns each to the PCA reference, and displays a
+morphing animation that smoothly interpolates between embeddings. The user can
+scrub between methods manually or play the morph animation.
 
-**Known issues**:
+**Design**: embeddings are compared as aligned 2D layouts via display-space
+morphing (interpolating between Procrustes-aligned coordinates), not by
+fitting them back into a linear tour basis. This correctly handles the
+nonlinear nature of t-SNE and UMAP embeddings.
 
-- The current approach fits nonlinear embeddings back into a linear tour basis
-  (`embeddingToBasis`), which is conceptually fragile for t-SNE/UMAP.
-- A safer design would compare aligned 2D layouts directly and label the
-  animation as a display-space morph, not a linear basis tour.
+**Quality metrics**: trustworthiness and continuity (Venna & Kaski 2006) with
+Shepard diagram are computed automatically after every projection run.
 
 **References**: Lekschas & Abdennur 2026, Section 2.3; Nagy et al. 2020,
-"Casting Multiple Shadows," arXiv:2012.06077.
+"Casting Multiple Shadows," arXiv:2012.06077; Venna & Kaski 2006.
 
 ---
 
@@ -207,48 +213,73 @@ displays, Becker & Cleveland 1996).
 | Feature | Status | Notes |
 |---------|--------|-------|
 | F1. Steerable Tour | ✅ Partial | Keyframes, scrubber, Catmull-Rom, manual tour done; projection previews and spectrum tour remain |
-| F2. Scagnostics | ✅ Done | Nine measures, sort/filter, scatmat highlighting |
+| F2. Scagnostics | ✅ Done | Nine measures, sort/filter, scatmat reorder, open top pair, seed tour, workerized |
 | F3. Concentric Coords | ✅ Done | Canvas rendering, linked brushing |
 | F4. Andrews Curves | ✅ Done | Canvas rendering, linked brushing |
-| F5. Mapper Graph | ✅ Done | Sidebar TDA view + first-class plot type with zoom/pan/hover |
+| F5. Mapper Graph | ✅ Done | Sidebar TDA view + first-class plot type; k-means/hierarchical/DBSCAN clustering; parameter sweep; workerized |
 | F6. Langevin Tour | ✅ Done | Step/diffusion controls, stochastic perturbation |
 | F7. Conditional Parcoords | ✅ Done | Categorical faceting |
-| F8. DR Validation Tours | ✅ Basic | Procrustes-aligned keyframe tour; basis fitting needs redesign |
+| F8. DR Validation | ✅ Done | Procrustes-aligned embedding morphs with quality metrics |
 | F9. WebGPU Compute | ❌ Future | Depends on browser adoption |
 | F10. 3D Tour | ❌ Parked | 3D scatter exists but tour integration disabled; camera conflict unresolved |
 
 ## Additional Features Implemented (Beyond Original Proposals)
 
-- **1D tour on dotplots**: Projects onto a 1D strip chart. Now fixed to
-  retarget `activePanelId` when switching tour shape.
+- **1D tour on dotplots**: Projects onto a 1D strip chart. Retargets
+  `activePanelId` when switching tour shape.
+- **Correlation tour (2×1D)**: two independent 1D tours on disjoint variable
+  sets, displayed as a scatterplot. Reveals between-set correlation structure.
 - **Projection pursuit**: Holes, central mass, LDA, PCA variance, kurtosis
   indices with real-time score display and score trace sparkline.
-- **LDA class source**: Supports both brushed groups and categorical variables.
+- **LDA class source**: Supports both brushed groups and categorical variables
+  as the class source for the LDA PP index.
 - **Clustering**: K-means, hierarchical, DBSCAN, OPTICS, X-Means with
-  interactive dendrogram cut.
-- **Classification**: KNN, Gaussian NB, Random Forest with decision boundary
-  overlay and misclassification marking.
+  interactive dendrogram cut, silhouette scores, k-distance plots, and
+  reachability plots.
+- **Classification**: KNN, Gaussian NB, Logistic Regression, Random Forest
+  with decision boundary overlay, misclassification marking (X cross),
+  uncertainty filter, confusion matrix, per-class precision/recall/F1,
+  5-fold cross-validation, and train/test split.
 - **Projection Explorer**: PCA, MDS, ICA, t-SNE, UMAP with loadings and
-  permutation importance.
+  permutation importance. DR comparison with Procrustes-aligned morphing.
 - **DR quality metrics**: Trustworthiness and continuity (Venna & Kaski
-  2006) with Shepard diagram, computed automatically after every
-  projection run.
-- **Educational HelpPopovers**: Every panel and toolbar now has `?` buttons
+  2006) with Shepard diagram, computed automatically after every projection.
+- **Scatter overlays**: density contours (KDE2D), rug marks, LOESS smooth,
+  biplot arrows.
+- **Educational HelpPopovers**: Every panel and toolbar has `?` buttons
   with what/why/how explanations and misconception warnings.
+- **Guided lessons**: 4 interactive tutorials (flea, olive, missing,
+  synthetic) with step-by-step overlay instructions and auto-loaded datasets.
+- **Session save/load**: Full configuration state serialized to JSON;
+  reloaded sessions preserve parameters but not computed results.
 - **Data export**: CSV export with paint and cluster columns.
 - **Keyboard shortcuts**: B/I/T/E/R/Space/Esc/? for common actions.
+- **Missing data handling**: Missing pattern plot, 4 imputation methods
+  (none, fixed, random, conditional), multiple imputation cycling.
+- **Variable transforms**: log, sqrt, rank, negate, power, jitter,
+  standardize, missing indicator, imputation transforms, per-variable
+  scaling modes, sphering/whitening.
+- **Code splitting**: lazy-loaded sidebar panels and rare plot types;
+  manual Vite chunks for vendor libraries; main bundle 70% smaller.
 
 ---
 
 ## Next Priorities
 
-1. **Redesign DR comparison** as explicit embedding morphs, not fitted tour bases ✅
-2. **Build tour diagnostics panel**: basis coefficients, variable contribution history, PP score trend, frozen variables, coverage metrics ✅
-3. **Add guided lessons**: flea (brushing/tours), olive (LDA/classification), missing (imputation/uncertainty), synthetic (scagnostics/clustering) ✅
-4. **Workerize expensive computations**: scagnostics ✅, projection ✅, Mapper (pending)
-5. **Promote Mapper to a first-class plot type** ✅
-6. **Add clustering/classification diagnostics**: k-distance, silhouette, confusion matrix, train/test split ✅
-7. **Add misconception warnings**: t-SNE distances, PP local optima, extrapolation, multiple comparisons ✅
-8. **Additional lens choices for Mapper** (PCA, residual, probability)
-9. **Parameter sweep and graph stability for Mapper**
-10. **Node detail views for Mapper** (overlap rows, variable summaries)
+1. **Classification bug fixes**: probability extraction bug (reads first-class
+   probability not max), scatmat shape 6 rendering, paint overwrite on apply,
+   indecision threshold not live, shape overload fragility
+2. **Font inlining for lib build**: post-build script regex not matching at
+   runtime; needs debugging
+3. **3D scatter tour integration**: camera conflict between tour rotation and
+   user camera control; requires careful design
+4. **Scagnostics subsampling stability**: estimate measure stability across
+   bootstrap subsamples
+5. **Mapper 2D filter functions**: support bi-variate lenses (e.g. PCA1 × PCA2)
+   for richer topological summaries
+6. **Level-of-detail rendering**: for datasets >100K points, implement LOD
+   culling and decimation in the regl renderer
+7. **Tour path editor**: interactive editing of keyframe sequences with
+   drag-to-reorder, delete, and insert
+8. **Session persistence for plot layout**: save and restore the open panel
+   arrangement across sessions

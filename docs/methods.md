@@ -542,8 +542,7 @@ $0$ means the point sits on the boundary between two clusters.
 Per-cluster mean silhouettes are also reported, helping identify which clusters
 are well-separated and which overlap.
 
-**Complexity**: $O(n^2)$ pairwise distances. Currently computed synchronously;
-future versions may workerize this.
+**Complexity**: $O(n^2)$ pairwise distances. Computed synchronously.
 
 ### k-Distance Plot
 
@@ -578,10 +577,10 @@ labeled as noise.
 
 ## Classification
 
-Classifiers use either **brushed groups** (painted on the scatterplot) or a
-**categorical variable** as class labels. The workflow is: choose a class
-source, select predictor variables, pick a method, train, then visualize
-decision boundaries.
+Classifiers use either **brushed groups** (painted on the scatterplot via
+persistent brush) or a **categorical variable** as class labels. The workflow
+is: choose a class source, select predictor variables, pick a method, train,
+then visualize decision boundaries.
 
 ### KNN --- K-Nearest Neighbors
 
@@ -592,9 +591,8 @@ $$\hat{y}(\mathbf{x}) = \text{mode}\{y_i : i \in k\text{NN}(\mathbf{x})\}$$
 
 Ties broken by the class with the nearest neighbor.
 
-**Per-class probability**: the implementation drives `ml-knn`'s internal
-kd-tree directly to get the actual `k` neighbors of each query point, then
-returns the per-class fraction:
+**Per-class probability**: the implementation retrieves the actual $k$ nearest
+neighbors of each query point and returns the per-class fraction:
 
 $$P(y = c \mid \mathbf{x}) = \frac{|\{i \in k\text{NN}(\mathbf{x}) : y_i = c\}|}{k}$$
 
@@ -737,7 +735,8 @@ re-run the classifier.
 
 #### Rendering
 
-The boundary is an *overlay layer*, not synthetic data rows. The
+The boundary is an **overlay layer** consumed directly by plot renderers from
+the classification slice --- the DataFrame is never modified. The
 classification slice holds:
 
 - `boundaryGrid`: per-point predictor coordinates ($n \times p$ row-major)
@@ -746,9 +745,9 @@ classification slice holds:
 - `boundaryVars`: snapshot of the predictor names that define the grid axes
 
 When **boundariesVisible** is true, scatter and scatterplot-matrix
-renderers pull this overlay and draw each point as an outline ring (shape 6)
-colored by its predicted class. The underlying DataFrame is **never
-modified** --- boundary rings do not appear in the missing-pattern plot,
+renderers pull this overlay and draw each point as an outline ring
+colored by its predicted class. The DataFrame is never modified ---
+boundary rings do not appear in the missing-pattern plot,
 parallel coordinates, boxplots, or CSV export.
 
 **Misclassified** original rows are reported via a separate
@@ -1020,9 +1019,19 @@ The Scag tab in the right sidebar lets you:
 - Filter pairs by a threshold on any measure
 - View a table of all $\binom{p}{2}$ pairs with bar-chart sparklines
 
+Computation runs in a **web worker** to keep the UI responsive.
+
 ### Scatmat Integration
 
-When scagnostics results exist, the scatterplot matrix highlights cells whose score on the selected filter measure exceeds the threshold. The cell background is tinted with intensity proportional to the score. Hovering over a cell shows the scagnostic score in the tooltip.
+When scagnostics results exist, the scatterplot matrix can be **reordered** by
+any scagnostic measure --- cells are rearranged so that the highest-scoring
+pairs cluster together. Individual cells are also highlighted with a background
+tint proportional to the selected filter measure score.
+
+**Actions**:
+- **Open top pair**: adds a scatterplot of the highest-ranked variable pair.
+- **Seed tour**: opens a scatterplot and starts a 2D grand tour seeded with
+  the top-ranked pair, jumping directly into an interesting projection.
 
 ---
 
@@ -1144,7 +1153,17 @@ where $\mathcal{R}$ is a reference set (subsampled to at most 2000 points) and $
 
 **2. Overlapping intervals**: the range of filter values $[\min f, \max f]$ is divided into $n_\text{int}$ intervals of equal width, each overlapping its neighbors by a fraction $\delta \in [0, 0.9)$. For interval width $w$ and overlap $\delta$, the step between interval starts is $s = w(1 - \delta)$. Points may belong to multiple intervals.
 
-**3. Partial clustering**: within each interval, points are clustered using k-means++ (with $k$ clusters). Clusters from different intervals that share points are connected by edges, forming the Mapper graph.
+**3. Partial clustering**: within each interval, points are clustered. Three
+clustering methods are available:
+
+- **k-means** (default): standard k-means++ with $k$ clusters per interval.
+- **Hierarchical**: agglomerative clustering with configurable linkage
+  (single, complete, or average), cut at $k$ clusters.
+- **DBSCAN**: density-based clustering with configurable eps and minPts.
+  Points not assigned to any cluster are labeled as noise.
+
+Clusters from different intervals that share points are connected by edges,
+forming the Mapper graph.
 
 $$G = (V, E), \quad V = \{c_{i,j}\}, \quad E = \{(c_{i,j}, c_{i',j'}) : c_{i,j} \cap c_{i',j'} \ne \emptyset\}$$
 
@@ -1175,9 +1194,13 @@ Node radius is proportional to cluster size (4–16 px). Edge width scales with 
 |-----------|---------|-------|-------------|
 | Filter | variable | variable, pca1, pca2, residual, eccentricity, density | Lens function |
 | Filter variable | (first) | any numeric | Variable for "variable" filter |
-| Intervals | 10 | 2–50 | Number of overlapping intervals |
-| Overlap | 0.5 | 0–0.9 | Fractional overlap between intervals |
-| Clusters | 3 | 2–10 | k-means clusters per interval |
+| Intervals | 10 | 2-50 | Number of overlapping intervals |
+| Overlap | 0.5 | 0-0.9 | Fractional overlap between intervals |
+| Clustering | k-means | k-means, hierarchical, DBSCAN | Method within each interval |
+| Cluster k | 3 | 2-10 | Clusters per interval (k-means/hierarchical) |
+| Linkage | complete | single, complete, average | Linkage for hierarchical clustering |
+| Eps | 0.5 | 0.01-10 | Neighborhood radius for DBSCAN |
+| MinPts | 5 | 2-50 | Minimum points for DBSCAN |
 
 ### Topological Interpretation
 
@@ -1187,6 +1210,142 @@ The Mapper graph reveals topological features of the data manifold [Carlsson 200
 - **Loops (cycles)**: indicate circular or toroidal structure in the data
 - **Branches (flares)**: indicate data extending in different directions from a central core
 - **Node size variation**: large nodes in narrow regions suggest concentration points or critical transitions
+
+### Parameter Sweep
+
+The Mapper panel offers a **parameter sweep** mode that computes Mapper graphs
+over a grid of (intervals × overlap) combinations. For each combination, the
+sweep records:
+
+- Number of nodes and edges
+- Number of connected components
+- Average node degree
+- Graph modularity
+
+The results are displayed as a heatmap, helping you identify parameter regions
+where the graph structure is stable. The sweep runs in a web worker.
+
+---
+
+## Missing Data and Imputation
+
+tgobi provides several strategies for handling missing values, accessible from
+the variable panel's transform menu and the missing-data panel.
+
+### Missing Pattern Plot
+
+A dedicated plot type shows a heatmap of missingness across all variables and
+rows: black cells indicate present values, colored cells indicate missing
+values. This gives a quick overview of the missingness structure.
+
+### Imputation Methods
+
+Four methods are available:
+
+**None** (default): missing values remain missing. Plots and algorithms skip
+rows with missing values in the relevant variables.
+
+**Fixed value**: replace all missing values in a variable with a user-specified
+constant. Useful when the missingness mechanism is known (e.g. a sentinel
+value).
+
+$$x_i^\text{imp} = c \qquad \text{for all } i \text{ where } x_i \text{ is missing}$$
+
+**Random observed**: replace each missing value with a randomly sampled
+observed value from the same variable. Preserves the marginal distribution but
+breaks correlations with other variables.
+
+$$x_i^\text{imp} \sim \text{Uniform}\{x_j : x_j \text{ is observed}\}$$
+
+**Conditional random**: replace each missing value with a randomly sampled
+observed value from the same *level* of a conditioning categorical variable.
+This preserves within-group distributions and is appropriate when the missingness
+mechanism varies across groups.
+
+$$x_i^\text{imp} \sim \text{Uniform}\{x_j : x_j \text{ is observed} \wedge g_j = g_i\}$$
+
+where $g$ is the conditioning variable.
+
+### Multiple Imputation Cycling
+
+Rather than committing to a single imputation, tgobi can generate multiple
+imputation sets and **cycle** through them. Each cycle draws a new random seed,
+producing different imputed values. Observing how plots change across
+imputations reveals the uncertainty introduced by the missing data: features
+that are stable across imputations are trustworthy; features that vanish or
+shift dramatically depend on the imputation choices.
+
+**Warning**: imputed values are not observations. Any pattern that appears only
+after imputation could be an artifact of the imputation method, not a real
+feature of the data.
+
+---
+
+## Session Persistence
+
+The session system serializes the current app state to a JSON file that can be
+reloaded later. **Save Session** downloads the file; **Open Session** restores
+it.
+
+### What is saved
+
+- Loaded DataFrame (data and column types)
+- Variable specs (include/exclude, type overrides, scaling, groups)
+- Selection state (paint groups, shapes, shadow mask)
+- Brush configuration (mode, tool, paint color)
+- Color encoding and palette
+- Tour parameters (shape, mode, PP index, speed, frozen vars, class source)
+- Clustering parameters (method, variables, k, linkage, eps, minPts, xi, kMax)
+- Classification parameters (method, variables, class source, grid mode,
+  resolution, hyperparameters, train/test split, indecision threshold)
+- Projection parameters (method, variables, nComponents, t-SNE/UMAP settings)
+- Scagnostics parameters (variables, sort/filter settings, scatmat reorder)
+- Mapper parameters (filter, intervals, overlap, clustering method, color-by)
+- Missing-data settings (imputation method, fixed value, seed, conditioning var)
+
+### What is not saved
+
+- **Open plot panels**: the layout of plot windows is not persisted.
+- **Computed results**: embeddings, cluster assignments, boundary grids,
+  scagnostic scores, and mapper graphs must be re-run after loading.
+- **Tour runtime state**: saved views, keyframes, basis/projection, and
+  play/pause state are reset.
+- **Hover/pinned rows**: identify-tool state is not persisted.
+
+This design keeps session files compact and portable, while requiring
+recomputation of derived results (which may differ across versions).
+
+---
+
+## Guided Lessons
+
+tgobi includes interactive tutorials that combine step-by-step instructions
+with live dataset exploration. Each lesson loads a sample dataset automatically
+and guides the user through key workflows.
+
+### Available Lessons
+
+1. **Brushing & Tours with Flea Beetles**: introduces linked brushing, color
+   encoding, the grand tour, and projection pursuit using the flea dataset.
+
+2. **LDA & Classification with Olive Oils**: covers painting groups, the LDA
+   projection pursuit index, classification, and decision boundary
+   visualization using the olive oil dataset.
+
+3. **Missing Data & Imputation Uncertainty**: demonstrates the missing pattern
+   plot, imputation methods (fixed, random, conditional), and cycling through
+   multiple imputations to visualize uncertainty.
+
+4. **Scagnostics & Clustering on Synthetic Data**: explores scagnostic measures,
+   scatterplot matrix reordering by measure, and clustering algorithms on
+   synthetic data.
+
+### Lesson Overlay
+
+During a lesson, a semi-transparent overlay appears at the top of the screen
+showing the current step's title, body text, and action hints. The user can
+navigate forward and backward through steps, or end the lesson at any time.
+The underlying application remains fully interactive throughout.
 
 ---
 
@@ -1236,6 +1395,14 @@ The Mapper graph reveals topological features of the data manifold [Carlsson 200
 
 22. Fruchterman, T. M. J. & Reingold, E. M. (1991). Graph drawing by force-directed placement. *Software: Practice and Experience*, 21(11), 1129–1164.
 
-23. Venna, J. & Kaski, S. (2006). Local multidimensional scaling. *Neural Networks*, 19(6–7), 889–899.
+23. Venna, J. & Kaski, S. (2006). Local multidimensional scaling. *Neural Networks*, 19(6-7), 889-899.
 
 24. Chalapathy, R. & Chawla, S. (2019). Deep learning for anomaly detection: a survey. *arXiv preprint arXiv:1901.03407*.
+
+25. Cook, D., Buja, A., Cabrera, J., & Hurley, C. (1993). Projection pursuit indices based on orthonormal function expansions. *Journal of Computational and Graphical Statistics*, 2(2), 137-158.
+
+26. Becker, R. A. & Cleveland, W. S. (1996). The design and control of trellis display. *Journal of Computational and Graphical Statistics*, 5(2), 123-155.
+
+27. Zhou, Y., Chalapathi, N., Rathore, A., Zhao, Y., & Wang, B. (2020). Mapper Interactive: a scalable, extendable, and interactive toolbox for the visual exploration of high-dimensional data. arXiv:2011.03209.
+
+28. Nagy, G. S., Bruckner, S., & Viola, I. (2020). Casting multiple shadows: interactive visualization for comparing multiple embeddings. arXiv:2012.06077.
