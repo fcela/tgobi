@@ -135,6 +135,46 @@ projections.
 not the global optimum. It is a stochastic search, and different runs may
 visit different projections.
 
+### Correlation tour (2x1D)
+
+A separate tour **shape** (alongside 1D and 2D) that visualizes the
+relationship between two disjoint variable sets by running *two independent
+1D tours simultaneously* — one for each axis of a scatterplot. With variable
+sets $\mathcal{X} = \{x_1, \ldots, x_{p_X}\}$ and
+$\mathcal{Y} = \{y_1, \ldots, y_{p_Y}\}$, the projection at any frame is
+
+$$\hat{x}_i = \sum_{j=1}^{p_X} X_{ij}\,b^X_j, \qquad
+\hat{y}_i = \sum_{j=1}^{p_Y} Y_{ij}\,b^Y_j$$
+
+where $\mathbf{b}^X \in \mathbb{S}^{p_X - 1}$ and
+$\mathbf{b}^Y \in \mathbb{S}^{p_Y - 1}$ are unit 1D bases that each follow
+their own grand-tour (or projection-pursuit) path. The data matrix is
+column-partitioned: the first $p_X$ active columns drive $\hat{x}$, the
+remaining $p_Y$ drive $\hat{y}$.
+
+The combined basis returned to the renderer is the $(p_X + p_Y) \times 2$
+block-diagonal matrix
+
+$$\mathbf{B} = \begin{bmatrix} \mathbf{b}^X & \mathbf{0} \\ \mathbf{0} & \mathbf{b}^Y \end{bmatrix},$$
+
+i.e. $X$-set variables contribute only to the rendered X coordinate and
+$Y$-set variables contribute only to the rendered Y coordinate. This lets
+the standard scatter renderer consume corr-tour frames identically to a
+regular 2D tour.
+
+**When to use**: structure that comes from the *between-set* relationship
+of two variable groups — for example, "does some linear combination of the
+sepal measurements predict (correlate with) some linear combination of the
+petal measurements?" Tilted scatter shapes during the tour indicate a
+correlation between the two 1D projections; a sphered cloud indicates
+independence in the linear sense.
+
+**Variable picker**: the Classify tour panel partitions the checked
+variables into X-set and Y-set automatically (split in the middle). The
+correlation tour itself is grand- or PP-driven on each axis independently;
+the keyframe/scrubber and Langevin modes are not yet wired through the
+correlation path.
+
 ---
 
 ## Projection (Dimensionality Reduction)
@@ -552,18 +592,36 @@ $$\hat{y}(\mathbf{x}) = \text{mode}\{y_i : i \in k\text{NN}(\mathbf{x})\}$$
 
 Ties broken by the class with the nearest neighbor.
 
+**Per-class probability**: the implementation drives `ml-knn`'s internal
+kd-tree directly to get the actual `k` neighbors of each query point, then
+returns the per-class fraction:
+
+$$P(y = c \mid \mathbf{x}) = \frac{|\{i \in k\text{NN}(\mathbf{x}) : y_i = c\}|}{k}$$
+
+These calibrated probabilities feed the uncertainty filter in the decision
+boundary visualization (see below).
+
 ### Gaussian Naive Bayes
 
 Assumes each class-conditional feature distribution is Gaussian, with features
-independent given the class.
+independent given the class. Implemented directly (not via `ml-naivebayes`)
+so per-class posteriors come from a log-space softmax, which doesn't underflow
+on many features.
 
 **Training**: estimate class priors, per-class means, and per-class variances.
+A small variance floor ($\sigma_{\min} = 10^{-9}$) prevents division by zero
+on degenerate (constant) features.
 
 $$P(y = c) = \frac{n_c}{n}, \qquad P(x_j \mid y = c) \sim \mathcal{N}(\mu_{cj},\, \sigma_{cj}^2)$$
 
 **Prediction** (via Bayes' theorem, with naive independence assumption):
 
 $$\hat{y}(\mathbf{x}) = \arg\max_c \left[\log P(y{=}c) + \sum_{j=1}^{p}\log P(x_j \mid y{=}c)\right]$$
+
+**Per-class probability**: posteriors are recovered by softmax on the
+log-posteriors (max-subtraction for numerical stability):
+
+$$P(y = c \mid \mathbf{x}) = \frac{\exp(\ell_c - \ell_{\max})}{\sum_{k} \exp(\ell_k - \ell_{\max})}, \quad \ell_c = \log P(y{=}c) + \sum_j \log P(x_j \mid y{=}c)$$
 
 ### Multinomial Logistic Regression
 
@@ -604,42 +662,131 @@ numerical crashes in internal rescaling.
 
 **Prediction**: majority vote across all trees.
 
+**Per-class probability**: tgobi calls `ml-random-forest`'s
+`predictProbability(toPredict, label)` once per class label and assembles the
+full distribution. Because that library rounds each per-class value to six
+decimals, the row is re-normalized to sum to 1 (falling back to a one-hot at
+the predicted class if all rounded values are zero).
+
 **Feature importance**: extracted via the `featureImportance()` method of the
 trained model, which computes mean decrease in Gini impurity across all trees.
 The importance vector is normalized so the maximum is 1.
 
 ### Decision Boundary Visualization
 
-After training, a grid of synthetic points is generated over the
-$p$-dimensional feature space spanned by all selected predictor variables:
+Modeled on R's [classifly](https://cran.r-project.org/package=classifly)
+package. The idea is to sample the predictor space on a regular grid, evaluate
+the trained model at each grid point, and *keep only those grid points whose
+predicted class differs from at least one axis-neighbor's*. Those neighbor-
+disagreement points densely outline the decision surface and can be
+projected like any data points into a scatterplot or tour.
 
-$$x_j^\text{grid} = \text{linspace}(\min x_j,\, \max x_j,\, \text{res}), \quad j = 1, \ldots, p$$
+#### Grid construction
 
-where $\text{res}$ is the grid resolution parameter. Each grid point is
-classified by the trained model, producing both a predicted class and a
-class probability vector. The **indecision** at each grid point is:
+Two grid modes are supported, selected by the **Boundary** picker.
+
+**2D slice** (`gridMode = "2d"`). The grid varies only along the first two
+selected predictor variables; remaining predictors are held at their
+training-set medians. Total point count is always exactly `resolution²`
+(e.g. $5 \times 5 = 25$), regardless of how many predictors are selected.
+
+**Full space** (`gridMode = "fullspace"`). The grid varies along every
+selected predictor:
+
+$$x_j^\text{grid} = \text{linspace}(\min x_j,\, \max x_j,\, r), \quad j = 1, \ldots, p$$
+
+Total point count is $r^p$ where $r$ is the **effective** per-axis
+resolution. If the requested resolution would exceed
+`MAX_GRID_POINTS = 200 000`, the implementation lowers $r$ to the largest
+value $\le$ requested such that $r^p \le 200\,000$. The Classify panel
+displays both the effective count and a "(capped from N)" note when this
+happens.
+
+Use 2D slice when you want a clean, fast boundary in one plane. Use Full
+space when you want boundary points to project meaningfully in any 2D tour
+projection of the predictor variables --- the rings stay coherent as you
+rotate.
+
+#### Boundary thinning (neighbor disagreement)
+
+Each grid point is classified, producing a predicted class $\hat{y}$ and a
+per-class probability vector. Then for each grid point, the implementation
+checks its $\pm 1$ neighbors along every grid axis. Points are kept iff at
+least one axis-neighbor has a different predicted class:
+
+$$\text{keep}(\mathbf{x}) = \begin{cases} 1 & \exists\, \mathbf{x}' \text{ axis-neighbor of }\mathbf{x}\text{ s.t. } \hat{y}(\mathbf{x}') \neq \hat{y}(\mathbf{x}) \\ 0 & \text{otherwise} \end{cases}$$
+
+This works for *any* classifier, including hard classifiers (KNN with $k=1$)
+whose probability is degenerate; it does not rely on $P = 0.5$ contour
+extraction. The retained points densely outline the decision surface in
+$p$-space.
+
+#### Uncertainty filter
+
+Each retained grid point also stores its **indecision** value:
 
 $$\text{indecision}(\mathbf{x}) = 1 - \max_k \, P(\hat{y} = k \mid \mathbf{x})$$
 
-When "Show" is clicked, the boundary grid points are **added to the
-DataFrame** as synthetic rows with ring-glyph shape (shape 6: outlined
-circles). Each grid point's paint color is set to its predicted class,
-and its variable values are filled from the grid coordinates. Non-predictor
-columns receive default values (0 for numeric, first level for categorical).
+The Classify panel's *Uncertainty* slider sets a threshold; only grid points
+with $\text{indecision}(\mathbf{x}) \ge \text{threshold}$ are drawn. The
+panel shows a live "$N$ of $M$ shown" count beside the slider, so even when
+the visual change is subtle (the boundary points found by neighbor
+disagreement often have similar probabilities) you can see the filter
+working. The filter is applied at render time --- moving the slider does not
+re-run the classifier.
 
-Because boundary grid points are regular DataFrame rows, they appear in
-**all plot types**: scatterplots, parallel coordinates, scatterplot matrices,
-and tours. During a tour, the boundary points rotate along with the data,
-showing how the decision boundary projects into each 2D view. The decision
-boundary emerges visually where adjacent ring glyphs change color.
+#### Rendering
 
-Clicking "Hide" removes the boundary rows from the DataFrame, restoring it
-to its original size. The trained model and its diagnostics (confusion matrix,
-accuracy, etc.) are preserved.
+The boundary is an *overlay layer*, not synthetic data rows. The
+classification slice holds:
 
-Misclassified data points are marked with an X cross (shape 5). The original
-point shapes are saved before classification and restored when the boundary
-points are hidden.
+- `boundaryGrid`: per-point predictor coordinates ($n \times p$ row-major)
+- `boundaryPaint`: per-point predicted-class paint index
+- `boundaryProbabilities`: per-point $1 - \max_k P_k$
+- `boundaryVars`: snapshot of the predictor names that define the grid axes
+
+When **boundariesVisible** is true, scatter and scatterplot-matrix
+renderers pull this overlay and draw each point as an outline ring (shape 6)
+colored by its predicted class. The underlying DataFrame is **never
+modified** --- boundary rings do not appear in the missing-pattern plot,
+parallel coordinates, boxplots, or CSV export.
+
+**Misclassified** original rows are reported via a separate
+`classification.misclassified` mask. Renderers draw those rows as an X
+cross (shape 5) regardless of the row's brushed shape, so analysis output
+doesn't trample any user-set shapes. Clicking Hide clears the mask without
+touching the user's brushed state.
+
+#### Boundary in tours
+
+To stay aligned with the data during a tour, boundary points are projected
+through the *same* basis $B \in \mathbb{R}^{p \times k}$ the tour worker
+uses, with one detail: the worker projects *standardized* data
+(`toStandardisedMatrix`), so the renderer standardizes each boundary
+coordinate the same way before multiplying:
+
+$$\mathbf{x}^\text{proj}_i = \tilde{\mathbf{x}}_i \, B, \qquad
+\tilde{x}_{ij} = \frac{x_{ij} - \mu_j}{\sigma_j}$$
+
+where $\mu_j, \sigma_j$ are computed across the same set of rows the tour
+worker used (non-shadowed, non-missing). For active tour variables that are
+*not* predictors, the natural fill value is the column mean, which
+standardizes to zero --- so those variables contribute nothing to the
+projection. At least one active tour variable must be a predictor;
+otherwise the boundary is hidden for that tour.
+
+Boundary rendering is also skipped if any active variable has explicit
+column scaling (e.g. `range`, `robust`) attached --- mirroring the full
+`scaleColumn` path in that case is a known TODO; the default no-scaling
+case works.
+
+#### Show / Hide
+
+`applyClassificationBoundaries` flips `boundariesVisible` to true. No
+DataFrame mutation, no setData churn, no missing-mask juggling: the
+operation is $O(1)$ in df size. `clearClassification` flips it back to
+false and preserves the boundary grid so the next *Show* re-displays
+without re-running the classifier.
 
 ### Confusion Matrix
 
@@ -660,9 +807,11 @@ From the confusion matrix, per-class metrics are derived:
 
 Overall accuracy: $\text{acc} = \frac{\sum_i C_{ii}}{\sum_{ij} C_{ij}}$.
 
-**Warning**: these metrics are computed on the training set, so they
-overestimate real-world performance. A classifier that memorizes training data
-will show 100% accuracy but may generalize poorly.
+**Warning**: when train/test split is *off*, these metrics are computed on
+the training set, so they overestimate real-world performance --- a classifier
+that memorizes its training data will show 100% accuracy but may generalize
+poorly. Enable train/test split (below) or read the 5-fold cross-validation
+estimate in the diagnostics panel for an honest score.
 
 ### Train/Test Split
 

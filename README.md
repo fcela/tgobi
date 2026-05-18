@@ -216,8 +216,9 @@ in scatterplots.
 
 ## Right Sidebar Tabs
 
-The right sidebar has four tabs: **Tour**, **Project**, **Cluster**, and
-**Classify**.
+The right sidebar has six tabs: **Tour**, **Project**, **Cluster**,
+**Classify**, **Scag** (scagnostics), and **Mapper** (topological data
+analysis).
 
 ### Tour Tab
 
@@ -227,6 +228,12 @@ tour) or dotplot (1D tour) to be open.
 **Shape**:
 - **2D (scatter)**: rotates a 2D projection plane through p-dimensional space.
 - **1D (dotplot)**: rotates a 1D projection direction.
+- **Correlation (2x1D)**: two *independent* 1D projections of two disjoint
+  variable sets — one drives the X axis of a scatterplot, the other drives
+  Y. Useful when you want to ask "does a 1D projection of one block of
+  variables correlate with a 1D projection of another?" The variable list
+  is split (first half → X-set, second half → Y-set); each set rotates
+  through its own grand or projection-pursuit path.
 
 **Modes**:
 
@@ -322,27 +329,68 @@ Criterion. OPTICS extracts clusters using the xi steepness parameter.
 
 ### Classify Tab
 
-Build a classifier from painted groups and visualize decision boundaries.
+Build a classifier from painted groups and visualize the decision boundary
+in any plot --- including animated tours. Inspired by R's
+[classifly](https://cran.r-project.org/package=classifly) package: instead of
+shading regions, tgobi samples the predictor space on a grid, asks the
+trained model what it would predict at each grid point, and keeps only those
+grid points where the prediction *changes between neighbors* (the
+neighbor-disagreement rule). Those boundary points are rendered as outline
+rings, colored by their predicted class.
 
 **Methods**:
 
 | Method | Key parameter | Description |
 |--------|---------------|-------------|
-| KNN | k | k-nearest neighbors |
-| Naive Bayes | - | Gaussian naive Bayes |
-| Random Forest | trees, max depth | Ensemble of decision trees |
+| KNN | k | k-nearest neighbors with calibrated neighbor-fraction probabilities |
+| Naive Bayes | - | Gaussian naive Bayes with softmax posterior |
+| Logistic | lambda, iter | Multinomial logistic regression, L2 regularized |
+| Random Forest | trees, max depth | Bagged decision trees with per-class vote ratio |
+
+All four methods return calibrated per-class probabilities that drive the
+**Uncertainty** filter.
 
 **Workflow**:
-1. Brush 2+ groups of points (persistent mode) --- these are the training
-   classes.
-2. Check 2 numeric variables as classification features.
-3. Set grid resolution (controls boundary detail).
-4. Click **Classify** to train the model.
-5. Click **Apply** to overlay a grid of predicted boundary points (ghosted,
-   colored by predicted class).
+1. **Brush** 2+ groups of points (persistent mode) --- these become the
+   training labels. Alternatively, set **Class** to a categorical variable
+   in the data.
+2. **Check** the numeric variables you want the model to use.
+3. **Boundary** mode: choose either *2D slice* (grid varies only along the
+   first 2 selected variables, others held at their training-set medians)
+   or *Full space* (grid varies along every predictor). Full-space grids
+   stay tour-meaningful in any projection but the point count grows as
+   `resolution^p`; tgobi caps the total at 200 000 and shows the effective
+   resolution next to the input.
+4. Pick the **Grid** resolution. The label next to it shows the projected
+   point count, e.g. `5×5 = 25 pts` or `7⁶ = 117 649 pts (capped from 15)`.
+5. Click **Train**, then **Show** to draw the boundary rings.
 
-The decision boundary grid is added as shadow rows so they don't affect
-downstream analysis.
+**Uncertainty filter** (slider): each boundary point also carries the
+classifier's `1 - max(class probability)` at that location. Drag the slider
+to hide confident points and keep only the uncertain ones. A live
+*N of M shown* counter ticks down as you raise the threshold.
+
+**Misclassified** training points render as an X-cross over their painted
+glyph, so you can see at a glance which examples the model disagrees with.
+
+**Where boundaries appear**:
+
+The boundary is an *overlay layer*, not synthetic data rows. It draws in
+scatter and scatterplot-matrix plots whose axes are predictors, and in a
+running 2D tour over the same (or a superset of the) predictor variables.
+It does **not** appear in the missing-pattern view, parallel coordinates,
+boxplots, or CSV export --- those views see the original data unchanged.
+
+In a tour, the boundary grid is standardized the same way the tour worker
+standardizes the data and then multiplied by the active basis, so the rings
+stay aligned with the rotating clusters. Tour-active variables that aren't
+predictors contribute nothing to the projection (their standardized value
+is 0).
+
+**Train/test split** (optional): when enabled, the labeled data is split
+stratified by class. The diagnostics panel reports test-set accuracy and a
+5-fold cross-validation estimate alongside the training-set confusion
+matrix.
 
 ---
 
