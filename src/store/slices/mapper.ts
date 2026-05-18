@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 import type { AppStore, MapperSlice } from "@/store/types";
-import { computeMapper, DEFAULT_MAPPER_PARAMS, type FilterFunction } from "@/lib/mapper";
+import { computeMapper, DEFAULT_MAPPER_PARAMS, type FilterFunction, type MapperClusterMethod, type MapperClusterLinkage } from "@/lib/mapper";
 import type { MapperGraph, MapperParams } from "@/lib/mapper";
 import { mapperSweep, type SweepResult } from "@/lib/mapper/sweep";
 import { resolveScaledValues } from "@/lib/data/resolveScaling";
@@ -86,6 +86,18 @@ export const createMapperSlice: StateCreator<AppStore, [], [], MapperSlice> = (s
   },
   setMapperClusterK: (k: number) => {
     set((s) => ({ mapper: { ...s.mapper, params: { ...s.mapper.params, clusterK: k } } }));
+  },
+  setMapperClusterMethod: (method: MapperClusterMethod) => {
+    set((s) => ({ mapper: { ...s.mapper, params: { ...s.mapper.params, clusterMethod: method } } }));
+  },
+  setMapperClusterLinkage: (linkage: MapperClusterLinkage) => {
+    set((s) => ({ mapper: { ...s.mapper, params: { ...s.mapper.params, clusterLinkage: linkage } } }));
+  },
+  setMapperClusterEps: (eps: number) => {
+    set((s) => ({ mapper: { ...s.mapper, params: { ...s.mapper.params, clusterEps: eps } } }));
+  },
+  setMapperClusterMinPts: (minPts: number) => {
+    set((s) => ({ mapper: { ...s.mapper, params: { ...s.mapper.params, clusterMinPts: minPts } } }));
   },
   setMapperVariables: (vars: string[]) => {
     set((s) => ({ mapper: { ...s.mapper, params: { ...s.mapper.params, variables: vars } } }));

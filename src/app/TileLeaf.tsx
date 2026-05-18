@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import type { TileLeaf as TileLeafType, PlotPanel } from "@/store/types";
 import { useAppStore } from "@/store";
 import { Scatter } from "@/plots/scatter/Scatter";
@@ -8,11 +8,12 @@ import { Scatmat } from "@/plots/scatmat/Scatmat";
 import { Parcoords } from "@/plots/parcoords/Parcoords";
 import { MissingPattern } from "@/plots/missing/MissingPattern";
 import { Timeseries } from "@/plots/timeseries/Timeseries";
-import { Scatter3D } from "@/plots/scatter3d/Scatter3D";
 import { Boxplot } from "@/plots/boxplot/Boxplot";
-import { Andrews } from "@/plots/andrews/Andrews";
-import { ConcentricCoords } from "@/plots/concentric/ConcentricCoords";
-import { MapperRenderer } from "@/plots/mapper/MapperRenderer";
+
+const Scatter3D = lazy(() => import("@/plots/scatter3d/Scatter3D").then((m) => ({ default: m.Scatter3D })));
+const Andrews = lazy(() => import("@/plots/andrews/Andrews").then((m) => ({ default: m.Andrews })));
+const ConcentricCoords = lazy(() => import("@/plots/concentric/ConcentricCoords").then((m) => ({ default: m.ConcentricCoords })));
+const MapperRenderer = lazy(() => import("@/plots/mapper/MapperRenderer").then((m) => ({ default: m.MapperRenderer })));
 
 interface TileLeafProps {
   node: TileLeafType;
@@ -153,14 +154,14 @@ function renderPanel(panel: PlotPanel) {
     case "timeseries":
       return <Timeseries panel={panel} />;
     case "scatter3d":
-      return <Scatter3D panel={panel} />;
+      return <Suspense fallback={null}><Scatter3D panel={panel} /></Suspense>;
     case "boxplot":
       return <Boxplot panel={panel} />;
     case "andrews":
-      return <Andrews panel={panel} />;
+      return <Suspense fallback={null}><Andrews panel={panel} /></Suspense>;
     case "concentric":
-      return <ConcentricCoords panel={panel} />;
+      return <Suspense fallback={null}><ConcentricCoords panel={panel} /></Suspense>;
     case "mapper":
-      return <MapperRenderer panel={panel} />;
+      return <Suspense fallback={null}><MapperRenderer panel={panel} /></Suspense>;
   }
 }

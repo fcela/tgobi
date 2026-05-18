@@ -282,4 +282,119 @@ describe("TourSlice", () => {
     expect(useAppStore.getState().tour.shape).toBe("1d");
     expect(useAppStore.getState().tour.activePanelId).toBeNull();
   });
+
+  it("startTour with corr shape splits vars into X and Y", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c", "d"]);
+    const t = useAppStore.getState().tour;
+    expect(t.shape).toBe("corr");
+    expect(t.activeVars).toEqual(["a", "b", "c", "d"]);
+    expect(t.activeXVars).toEqual(["a", "b"]);
+    expect(t.activeYVars).toEqual(["c", "d"]);
+    expect(t.isPlaying).toBe(true);
+  });
+
+  it("startTour with corr shape and odd number of vars splits ceil(n/2) to X", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c"]);
+    const t = useAppStore.getState().tour;
+    expect(t.activeXVars).toEqual(["a", "b"]);
+    expect(t.activeYVars).toEqual(["c"]);
+  });
+
+  it("startTour with non-corr shape leaves activeXVars and activeYVars empty", () => {
+    useAppStore.getState().startTour(7, "2d", ["a", "b", "c"]);
+    const t = useAppStore.getState().tour;
+    expect(t.activeXVars).toEqual([]);
+    expect(t.activeYVars).toEqual([]);
+  });
+
+  it("stopTour resets activeXVars and activeYVars", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c", "d"]);
+    useAppStore.getState().stopTour();
+    const t = useAppStore.getState().tour;
+    expect(t.activeXVars).toEqual([]);
+    expect(t.activeYVars).toEqual([]);
+  });
+
+  it("setTourActiveXVars updates activeXVars and recomputes activeVars", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c", "d"]);
+    useAppStore.getState().setTourActiveXVars(["a"]);
+    const t = useAppStore.getState().tour;
+    expect(t.activeXVars).toEqual(["a"]);
+    expect(t.activeYVars).toEqual(["c", "d"]);
+    expect(t.activeVars).toEqual(["a", "c", "d"]);
+  });
+
+  it("setTourActiveYVars updates activeYVars and recomputes activeVars", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c", "d"]);
+    useAppStore.getState().setTourActiveYVars(["d"]);
+    const t = useAppStore.getState().tour;
+    expect(t.activeXVars).toEqual(["a", "b"]);
+    expect(t.activeYVars).toEqual(["d"]);
+    expect(t.activeVars).toEqual(["a", "b", "d"]);
+  });
+
+  it("setTourActiveXVars drops frozen vars no longer in activeVars", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c", "d"]);
+    useAppStore.getState().toggleTourVarFrozen("b");
+    expect(useAppStore.getState().tour.frozenVars).toEqual(["b"]);
+    useAppStore.getState().setTourActiveXVars(["a"]);
+    const t = useAppStore.getState().tour;
+    expect(t.frozenVars).toEqual([]);
+  });
+
+  it("setTourShape to corr splits activeVars into X and Y", () => {
+    const scatterId = useAppStore.getState().addScatter("x", "y");
+    useAppStore.getState().startTour(scatterId, "2d", ["a", "b", "c", "d"]);
+    useAppStore.getState().setTourShape("corr");
+    const t = useAppStore.getState().tour;
+    expect(t.shape).toBe("corr");
+    expect(t.activeXVars).toEqual(["a", "b"]);
+    expect(t.activeYVars).toEqual(["c", "d"]);
+    expect(t.activePanelId).toBe(scatterId);
+  });
+
+  it("saveCurrentView with corr shape includes xVars and yVars", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c", "d"]);
+    useAppStore.getState().setTourFrame(
+      new Float64Array([1, 0, 0, 0, 0, 0, 0, 1]),
+      new Float64Array([0.1, 0.2]),
+      0,
+    );
+    const id = useAppStore.getState().saveCurrentView("corr view");
+    const v = useAppStore.getState().tour.savedViews.find((x) => x.id === id);
+    expect(v?.xVars).toEqual(["a", "b"]);
+    expect(v?.yVars).toEqual(["c", "d"]);
+  });
+
+  it("restoreView with corr shape restores xVars and yVars", () => {
+    useAppStore.getState().startTour(7, "corr", ["a", "b", "c", "d"]);
+    useAppStore.getState().setTourFrame(
+      new Float64Array([1, 0, 0, 0, 0, 0, 0, 1]),
+      new Float64Array([0.1, 0.2]),
+      0,
+    );
+    const id = useAppStore.getState().saveCurrentView("corr view");
+    useAppStore.getState().setTourActiveXVars(["a"]);
+    useAppStore.getState().restoreView(id);
+    const t = useAppStore.getState().tour;
+    expect(t.activeXVars).toEqual(["a", "b"]);
+    expect(t.activeYVars).toEqual(["c", "d"]);
+    expect(t.isPlaying).toBe(false);
+  });
+
+  it("setTourShape corr retargets to scatter panel", () => {
+    const scatterId = useAppStore.getState().addScatter("x", "y");
+    const dotplotId = useAppStore.getState().addDotplot("x");
+    useAppStore.getState().startTour(dotplotId, "1d", ["a", "b", "c", "d"]);
+    useAppStore.getState().setTourShape("corr");
+    const t = useAppStore.getState().tour;
+    expect(t.shape).toBe("corr");
+    expect(t.activePanelId).toBe(scatterId);
+  });
+
+  it("defaults include activeXVars and activeYVars", () => {
+    const t = useAppStore.getState().tour;
+    expect(t.activeXVars).toEqual([]);
+    expect(t.activeYVars).toEqual([]);
+  });
 });

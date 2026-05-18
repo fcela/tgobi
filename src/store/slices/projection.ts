@@ -48,6 +48,42 @@ function projectSync(
   }
 }
 
+function compareDRSync(
+  data: Float64Array,
+  n: number,
+  p: number,
+  tsnePerplexity: number,
+  tsneIterations: number,
+  umapNNeighbors: number,
+  umapMinDist: number,
+): { label: string; embedding: Float64Array }[] {
+  const refEmbed = pcaProject(data, n, p, 2).embedding;
+  const methods: { key: ProjectionMethod; label: string; fn: () => Float64Array }[] = [
+    { key: "pca", label: "PCA", fn: () => refEmbed },
+    { key: "mds", label: "MDS", fn: () => mdsProject(data, n, p, 2).embedding },
+    { key: "ica", label: "ICA", fn: () => icaProject(data, n, p, 2).embedding },
+    { key: "tsne", label: "t-SNE", fn: () => tsneProject(data, n, p, 2, tsnePerplexity, tsneIterations).embedding },
+    { key: "umap", label: "UMAP", fn: () => umapProject(data, n, p, 2, umapNNeighbors, umapMinDist).embedding },
+  ];
+  const morphEmbeddings: { label: string; embedding: Float64Array }[] = [];
+  for (const { key, label, fn } of methods) {
+    let embed: Float64Array;
+    if (key === "pca") {
+      embed = refEmbed;
+    } else {
+      const rawEmbed = fn();
+      embed = procrustesAlign(refEmbed, rawEmbed, n);
+    }
+    morphEmbeddings.push({ label, embedding: embed });
+  }
+  return morphEmbeddings;
+}
+
+type WorkerOutMessage =
+  | { kind: "result"; result: ProjectionResult }
+  | { kind: "compareResult"; morphEmbeddings: { label: string; embedding: Float64Array }[] }
+  | { kind: "error"; error: string };
+
 export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSlice> = (set, get) => ({
   projection: {
     method: "pca",
@@ -154,15 +190,16 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
     loadProjWorker().then((WorkerClass) => {
       if (WorkerClass) {
         const worker = new WorkerClass() as Worker;
-        worker.onmessage = (e: MessageEvent<{ kind: "result"; result: ProjectionResult } | { kind: "error"; error: string }>) => {
+        worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
           worker.terminate();
           const msg = e.data;
           if (msg.kind === "error") {
             set((s) => ({ projection: { ...s.projection, running: false, error: msg.error } }));
             return;
           }
-          const result = msg.result;
-          finishProjection(result);
+          if (msg.kind === "result") {
+            finishProjection(msg.result);
+          }
         };
         worker.onerror = (err) => {
           worker.terminate();
@@ -170,15 +207,9 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
         };
         const dataCopy = new Float64Array(usedData);
         worker.postMessage({
-          data: dataCopy,
-          n: usedN,
-          p,
-          nComponents,
-          method,
-          tsnePerplexity,
-          tsneIterations,
-          umapNNeighbors,
-          umapMinDist,
+          kind: "project",
+          data: dataCopy, n: usedN, p, nComponents, method,
+          tsnePerplexity, tsneIterations, umapNNeighbors, umapMinDist,
         }, [dataCopy.buffer]);
       } else {
         setTimeout(() => {
@@ -294,7 +325,7 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
 
   compareDR: () => {
     const { df } = get();
-    const { variables } = get().projection;
+    const { variables, tsnePerplexity, tsneIterations, umapNNeighbors, umapMinDist } = get().projection;
     const { shadow } = get().selection;
 
     const vars = variables.length >= 2 ? variables : (get().tour.activeVars.length >= 2 ? get().tour.activeVars : variables);
@@ -306,107 +337,127 @@ export const createProjectionSlice: StateCreator<AppStore, [], [], ProjectionSli
 
     set((s) => ({ projection: { ...s.projection, running: true, error: null } }));
 
-    setTimeout(() => {
-      try {
-        const p = vars.length;
-        const columns = vars.map((name) => df.column(name));
-        for (const col of columns) {
-          if (!col || (col.type !== "numeric" && col.type !== "integer")) {
-            throw new Error(`Variable "${col?.name ?? "?"}" is not numeric`);
-          }
-        }
-
-        const rows: number[] = [];
-        for (let i = 0; i < df.nrow; i++) {
-          if (bitGet(shadow, i)) continue;
-          let valid = true;
-          for (const col of columns) {
-            if (col!.missing.isMissing(i)) { valid = false; break; }
-          }
-          if (valid) rows.push(i);
-        }
-
-        if (rows.length < 4) {
-          set((s) => ({ projection: { ...s.projection, running: false, error: "Need at least 4 non-shadowed complete rows" } }));
-          return;
-        }
-
-        const n = rows.length;
-        const data = new Float64Array(n * p);
-        for (let i = 0; i < n; i++) {
-          for (let j = 0; j < p; j++) {
-            const col = columns[j]!;
-            const val = col.type === "integer" ? col.values[rows[i]!] : col.type === "numeric" ? col.values[rows[i]!] : 0;
-            data[i * p + j] = val ?? 0;
-          }
-        }
-
-        const usedN = Math.min(n, 2000);
-        const usedData = n > 2000 ? subsampleRows(data, n, p, 2000) : data;
-
-        const refResult = pcaProject(usedData, usedN, p, 2);
-        const refEmbed = refResult.embedding;
-
-        const methods: { key: ProjectionMethod; label: string; fn: () => Float64Array }[] = [
-          { key: "pca", label: "PCA", fn: () => refEmbed },
-          { key: "mds", label: "MDS", fn: () => mdsProject(usedData, usedN, p, 2).embedding },
-          { key: "ica", label: "ICA", fn: () => icaProject(usedData, usedN, p, 2).embedding },
-          { key: "tsne", label: "t-SNE", fn: () => tsneProject(usedData, usedN, p, 2, 30, 500).embedding },
-          { key: "umap", label: "UMAP", fn: () => umapProject(usedData, usedN, p, 2, 15, 0.1).embedding },
-        ];
-
-        const morphEmbeddings: { label: string; embedding: Float64Array }[] = [];
-        for (const { key, label, fn } of methods) {
-          let embed: Float64Array;
-          if (key === "pca") {
-            embed = refEmbed;
-          } else {
-            const rawEmbed = fn();
-            embed = procrustesAlign(refEmbed, rawEmbed, usedN);
-          }
-          const fullEmbed = new Float64Array(df.nrow * 2);
-          for (let i = 0; i < n; i++) {
-            fullEmbed[rows[i]! * 2] = embed[i * 2]!;
-            fullEmbed[rows[i]! * 2 + 1] = embed[i * 2 + 1]!;
-          }
-          morphEmbeddings.push({ label, embedding: fullEmbed });
-        }
-
-        set((s) => ({
-          projection: {
-            ...s.projection,
-            running: false,
-            morphEmbeddings,
-            morphIndex: 0,
-            morphT: 0,
-            morphPlaying: false,
-          },
-        }));
-      } catch (e) {
-        set((s) => ({
-          projection: {
-            ...s.projection,
-            running: false,
-            error: e instanceof Error ? e.message : String(e),
-          },
-        }));
+    const p = vars.length;
+    const columns = vars.map((name) => df.column(name));
+    for (const col of columns) {
+      if (!col || (col.type !== "numeric" && col.type !== "integer")) {
+        set((s) => ({ projection: { ...s.projection, running: false, error: `Variable "${col?.name ?? "?"}" is not numeric` } }));
+        return;
       }
-    }, 0);
+    }
+
+    const rows: number[] = [];
+    for (let i = 0; i < df.nrow; i++) {
+      if (bitGet(shadow, i)) continue;
+      let valid = true;
+      for (const col of columns) {
+        if (col!.missing.isMissing(i)) { valid = false; break; }
+      }
+      if (valid) rows.push(i);
+    }
+
+    if (rows.length < 4) {
+      set((s) => ({ projection: { ...s.projection, running: false, error: "Need at least 4 non-shadowed complete rows" } }));
+      return;
+    }
+
+    const n = rows.length;
+    const data = new Float64Array(n * p);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < p; j++) {
+        const col = columns[j]!;
+        const val = col.type === "integer" ? col.values[rows[i]!] : col.type === "numeric" ? col.values[rows[i]!] : 0;
+        data[i * p + j] = val ?? 0;
+      }
+    }
+
+    const usedN = Math.min(n, 2000);
+    const usedData = n > 2000 ? subsampleRows(data, n, p, 2000) : data;
+
+    loadProjWorker().then((WorkerClass) => {
+      if (WorkerClass) {
+        const worker = new WorkerClass() as Worker;
+        worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
+          worker.terminate();
+          const msg = e.data;
+          if (msg.kind === "error") {
+            set((s) => ({ projection: { ...s.projection, running: false, error: msg.error } }));
+            return;
+          }
+          if (msg.kind === "compareResult") {
+            const morphEmbeddings: { label: string; embedding: Float64Array }[] = [];
+            for (const me of msg.morphEmbeddings) {
+              const fullEmbed = new Float64Array(df!.nrow * 2);
+              for (let i = 0; i < n; i++) {
+                fullEmbed[rows[i]! * 2] = me.embedding[i * 2]!;
+                fullEmbed[rows[i]! * 2 + 1] = me.embedding[i * 2 + 1]!;
+              }
+              morphEmbeddings.push({ label: me.label, embedding: fullEmbed });
+            }
+            set((s) => ({
+              projection: {
+                ...s.projection,
+                running: false,
+                morphEmbeddings,
+                morphIndex: 0,
+                morphT: 0,
+                morphPlaying: false,
+              },
+            }));
+          }
+        };
+        worker.onerror = (err) => {
+          worker.terminate();
+          set((s) => ({ projection: { ...s.projection, running: false, error: err.message } }));
+        };
+        const dataCopy = new Float64Array(usedData);
+        worker.postMessage({
+          kind: "compareDR",
+          data: dataCopy, n: usedN, p,
+          tsnePerplexity, tsneIterations, umapNNeighbors, umapMinDist,
+        }, [dataCopy.buffer]);
+      } else {
+        setTimeout(() => {
+          try {
+            const raw = compareDRSync(usedData, usedN, p, tsnePerplexity, tsneIterations, umapNNeighbors, umapMinDist);
+            const morphEmbeddings: { label: string; embedding: Float64Array }[] = [];
+            for (const me of raw) {
+              const fullEmbed = new Float64Array(df.nrow * 2);
+              for (let i = 0; i < n; i++) {
+                fullEmbed[rows[i]! * 2] = me.embedding[i * 2]!;
+                fullEmbed[rows[i]! * 2 + 1] = me.embedding[i * 2 + 1]!;
+              }
+              morphEmbeddings.push({ label: me.label, embedding: fullEmbed });
+            }
+            set((s) => ({
+              projection: {
+                ...s.projection,
+                running: false,
+                morphEmbeddings,
+                morphIndex: 0,
+                morphT: 0,
+                morphPlaying: false,
+              },
+            }));
+          } catch (e) {
+            set((s) => ({
+              projection: { ...s.projection, running: false, error: e instanceof Error ? e.message : String(e) },
+            }));
+          }
+        }, 0);
+      }
+    });
   },
 
-  setMorphIndex: (i) =>
-    set((s) => ({ projection: { ...s.projection, morphIndex: i, morphT: 0 } })),
+  setMorphIndex: (i) => set((s) => ({ projection: { ...s.projection, morphIndex: i, morphT: 0 } })),
 
-  setMorphT: (t) =>
-    set((s) => ({ projection: { ...s.projection, morphT: t } })),
+  setMorphT: (t) => set((s) => ({ projection: { ...s.projection, morphT: t } })),
 
-  setMorphPlaying: (playing) =>
-    set((s) => ({ projection: { ...s.projection, morphPlaying: playing } })),
+  setMorphPlaying: (playing) => set((s) => ({ projection: { ...s.projection, morphPlaying: playing } })),
 
-  stopMorph: () =>
-    set((s) => ({
-      projection: { ...s.projection, morphPlaying: false, morphT: 0, morphIndex: 0 },
-    })),
+  stopMorph: () => set((s) => ({
+    projection: { ...s.projection, morphPlaying: false, morphT: 0, morphIndex: 0 },
+  })),
 });
 
 const methodLabelMap: Record<ProjectionMethod, string> = {

@@ -9,24 +9,39 @@ export function knnClassify(
 ): ClassificationResult {
   const nClasses = new Set(trainY).size;
   const model = new KNN(trainX, trainY, { k });
-  const raw = model.predict(predictX);
-  const predictions = new Int16Array(raw.length);
-  for (let i = 0; i < raw.length; i++) predictions[i] = raw[i]!;
 
-  const allProbs = new Float32Array(predictX.length);
-  try {
-    const probResults = (model as any).predictProbabilities ? (model as any).predictProbabilities(predictX) : null;
-    if (probResults) {
-      for (let i = 0; i < predictX.length; i++) {
-        const c = predictions[i]!;
-        const row = Array.isArray(probResults[i]) ? probResults[i] : probResults;
-        allProbs[i] = c >= 0 && c < row.length ? Math.max(row[c] ?? 0, 0) : 0;
+  // The kdTree stores each point as [x1, ..., xP, label] (ml-knn appends the
+  // label to each row). nearest(point, k) returns [[point, dist], ...].
+  const kdTree = (model as unknown as { kdTree: { nearest: (pt: number[], k: number) => [number[], number][] } }).kdTree;
+  const labelIdx = trainX[0]!.length;
+
+  const predictions = new Int16Array(predictX.length);
+  const probabilities = new Float32Array(predictX.length * nClasses);
+  const counts = new Int32Array(nClasses);
+  const denom = 1 / k;
+
+  for (let i = 0; i < predictX.length; i++) {
+    const neighbors = kdTree.nearest(predictX[i]!, k);
+    counts.fill(0);
+    // Walk neighbors in distance order (kdTree.nearest returns them sorted)
+    // and pick the class that *reaches* the new max count first — this
+    // matches ml-knn's tiebreak: ties resolve in favor of the class whose
+    // closest neighbor is closer.
+    let bestC = -1;
+    let bestN = 0;
+    for (let j = 0; j < neighbors.length; j++) {
+      const label = neighbors[j]![0][labelIdx]! | 0;
+      if (label < 0 || label >= nClasses) continue;
+      const c = ++counts[label]!;
+      if (c > bestN) {
+        bestN = c;
+        bestC = label;
       }
-    } else {
-      for (let i = 0; i < predictX.length; i++) allProbs[i] = 1;
     }
-  } catch {
-    for (let i = 0; i < predictX.length; i++) allProbs[i] = 1;
+    for (let c = 0; c < nClasses; c++) {
+      probabilities[i * nClasses + c] = counts[c]! * denom;
+    }
+    predictions[i] = bestC >= 0 ? bestC : 0;
   }
 
   const sizes = new Array<number>(nClasses).fill(0);
@@ -34,5 +49,5 @@ export function knnClassify(
     const c = predictions[i]!;
     if (c >= 0 && c < nClasses) sizes[c]!++;
   }
-  return { predictions, nClasses, sizes, probabilities: allProbs };
+  return { predictions, nClasses, sizes, probabilities };
 }

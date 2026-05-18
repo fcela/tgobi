@@ -49,7 +49,7 @@
     "dev": "vite",
     "build": "npm run build:app && npm run build:lib",
     "build:app": "tsc -b && vite build",
-    "build:lib": "tsc -p tsconfig.lib.json && vite build --config vite.lib.config.ts",
+    "build:lib": "tsc -p tsconfig.lib.json && vite build --config vite.lib.config.ts && node scripts/inline-fonts.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mapperSweep } from "../sweep";
+import { DEFAULT_MAPPER_PARAMS } from "../index";
 
 function makeCol(name: string, values: number[]) {
   return {
@@ -17,7 +18,7 @@ describe("mapperSweep", () => {
       makeCol("x", Array.from({ length: 50 }, (_, i) => Math.sin(i * 0.3))),
       makeCol("y", Array.from({ length: 50 }, (_, i) => Math.cos(i * 0.3))),
     ];
-    const params = { filter: "variable" as const, filterVar: null, intervals: 10, overlap: 0.5, clusterK: 3, variables: ["x", "y"] };
+    const params = { ...DEFAULT_MAPPER_PARAMS, filter: "variable" as const, filterVar: null, intervals: 10, overlap: 0.5, clusterK: 3, variables: ["x", "y"] };
     const intRange = [5, 10];
     const ovlRange = [0.3, 0.5];
     const results = mapperSweep(values, missing, 50, cols, params, intRange, ovlRange);
@@ -39,7 +40,7 @@ describe("mapperSweep", () => {
       makeCol("x", Array.from({ length: 60 }, (_, i) => Math.sin(i * 0.2))),
       makeCol("y", Array.from({ length: 60 }, (_, i) => Math.cos(i * 0.2))),
     ];
-    const params = { filter: "variable" as const, filterVar: null, intervals: 10, overlap: 0.5, clusterK: 3, variables: ["x", "y"] };
+    const params = { ...DEFAULT_MAPPER_PARAMS, filter: "variable" as const, filterVar: null, intervals: 10, overlap: 0.5, clusterK: 3, variables: ["x", "y"] };
     const results = mapperSweep(values, missing, 60, cols, params, [8], [0.1, 0.8]);
     const lowOverlap = results.find((r) => r.overlap === 0.1);
     const highOverlap = results.find((r) => r.overlap === 0.8);
@@ -55,7 +56,7 @@ describe("mapperSweep", () => {
       makeCol("x", Array.from({ length: 80 }, (_, i) => Math.sin(i * 0.15))),
       makeCol("y", Array.from({ length: 80 }, (_, i) => Math.cos(i * 0.15))),
     ];
-    const params = { filter: "variable" as const, filterVar: null, intervals: 10, overlap: 0.5, clusterK: 3, variables: ["x", "y"] };
+    const params = { ...DEFAULT_MAPPER_PARAMS, filter: "variable" as const, filterVar: null, intervals: 10, overlap: 0.5, clusterK: 3, variables: ["x", "y"] };
     const results = mapperSweep(values, missing, 80, cols, params, [5, 15], [0.3]);
     const lowInt = results.find((r) => r.intervals === 5);
     const highInt = results.find((r) => r.intervals === 15);

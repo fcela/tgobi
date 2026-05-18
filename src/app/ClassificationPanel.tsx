@@ -1,6 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useAppStore } from "@/store";
 import type { ClassificationMethod } from "@/lib/classification/types";
+import type { ClassificationGridMode } from "@/store/types";
+import { effectiveResolutionND, MAX_GRID_POINTS } from "@/lib/classification/grid";
 import { ClampedInput } from "@/app/ClampedInput";
 import { HelpPopover } from "@/app/HelpPopover";
 import { ClassificationDiagnostics } from "@/app/ClassificationDiagnostics";
@@ -9,11 +11,11 @@ export function ClassificationPanel() {
   const df = useAppStore((s) => s.df);
   const classification = useAppStore((s) => s.classification);
   const paint = useAppStore((s) => s.selection.paint);
-  const colorEncoding = useAppStore((s) => s.color.encoding);
   const setMethod = useAppStore((s) => s.setClassificationMethod);
   const setVariables = useAppStore((s) => s.setClassificationVariables);
   const setClassSource = useAppStore((s) => s.setClassificationClassSource);
   const setGridResolution = useAppStore((s) => s.setClassificationGridResolution);
+  const setGridMode = useAppStore((s) => s.setClassificationGridMode);
   const setKnnK = useAppStore((s) => s.setClassificationKnnK);
   const setRfNEstimators = useAppStore((s) => s.setClassificationRfNEstimators);
   const setRfMaxDepth = useAppStore((s) => s.setClassificationRfMaxDepth);
@@ -25,6 +27,7 @@ export function ClassificationPanel() {
   const applyBoundaries = useAppStore((s) => s.applyClassificationBoundaries);
   const clear = useAppStore((s) => s.clearClassification);
   const reset = useAppStore((s) => s.resetClassification);
+  const setIndecisionThreshold = useAppStore((s) => s.setIndecisionThreshold);
 
   const numericVars = useMemo(
     () => df?.columns.filter((c) => c.type === "numeric" || c.type === "integer").map((c) => c.name) ?? [],
@@ -47,15 +50,6 @@ export function ClassificationPanel() {
   }, [paint]);
 
   const classSource = classification.classSource;
-
-  useEffect(() => {
-    if (colorEncoding.kind === "byVar" && colorEncoding.scale === "categorical" && classification.classSource === "paint") {
-      const col = df?.column(colorEncoding.var);
-      if (col?.type === "categorical") {
-        setClassSource(colorEncoding.var);
-      }
-    }
-  }, [colorEncoding, classification.classSource, df, setClassSource]);
 
   const canRun = !!df
     && classification.variables.length >= 2
@@ -172,14 +166,58 @@ export function ClassificationPanel() {
         </div>
       )}
 
-      <div className="row">
-        <span>Grid</span>
-        <HelpPopover content={<><p className="help-title">Decision Boundary Grid</p><p>Resolution of the boundary grid. When you click Show, grid points are added to the dataset as ring glyphs (outline circles) colored by predicted class. The decision boundary appears where adjacent rings change color.</p><p><b>2-5</b>: coarse, fast. <b>8-12</b>: fine, slower. Boundary points appear in all plot types including tours.</p></>} />
-        <ClampedInput value={classification.gridResolution} min={2} max={15} ariaLabel="grid resolution" onChange={setGridResolution} />
-      </div>
+  <div className="row">
+    <span>Boundary</span>
+    <HelpPopover content={<><p className="help-title">Boundary Grid Mode</p><p><b>2D slice</b>: Grid covers the first 2 predictor variables (a single 2D plane through the training-set medians of any extra predictors). Cheap; ideal for inspecting a specific axis pair in scatter / parcoords.</p><p><b>Full space</b>: Grid fills the full p-dimensional predictor box. Boundary points appear in <i>every</i> tour projection, so you can rotate around the decision surface. Total point count grows as <code>r<sup>p</sup></code>; the effective per-axis resolution is automatically lowered until it fits a {MAX_GRID_POINTS.toLocaleString()}-point cap.</p></>} />
+    <select
+      aria-label="grid mode"
+      value={classification.gridMode}
+      onChange={(e) => setGridMode(e.target.value as ClassificationGridMode)}
+    >
+      <option value="2d">2D slice</option>
+      <option value="fullspace">Full space</option>
+    </select>
+  </div>
+
+  <div className="row">
+    <span>Grid</span>
+    <HelpPopover content={<><p className="help-title">Decision Boundary Grid</p><p>Per-axis resolution. After classification only grid points near the decision boundary (where adjacent cells have different predicted classes) are kept, so the number of boundary points is typically much smaller than the total grid count.</p><p><b>2-5</b>: coarse, fast. <b>8-12</b>: fine, slower.</p><p>In Full-space mode, the effective resolution may be lowered automatically when <code>r<sup>p</sup></code> exceeds the {MAX_GRID_POINTS.toLocaleString()}-point cap.</p></>} />
+    <ClampedInput value={classification.gridResolution} min={2} max={15} ariaLabel="grid resolution" onChange={setGridResolution} />
+    <small style={{ color: "var(--text-dim)" }}>
+      {(() => {
+        const p = Math.max(1, classification.variables.length);
+        if (classification.gridMode === "fullspace") {
+          const r = effectiveResolutionND(classification.gridResolution, p);
+          const total = Math.pow(r, p);
+          const dropped = r < classification.gridResolution;
+          return <>{r}{Array(p - 1).fill(0).map((_, i) => <span key={i}>&times;{r}</span>)} = {total.toLocaleString()} pts{dropped && ` (capped from ${classification.gridResolution})`}</>;
+        }
+        const r = classification.gridResolution;
+        return <>{r}&times;{r} = {r * r} pts</>;
+      })()}
+    </small>
+  </div>
+
+  {classification.boundaryPaint && (
+  <div className="row">
+    <span>Uncertainty</span>
+    <HelpPopover content={<><p className="help-title">Indecision Threshold</p><p>Filter boundary grid points to show only those where the classifier is uncertain. The uncertainty of a grid point is <code>1 - max(class probability)</code>: high values mean the classifier is unsure which class the point belongs to.</p><p><b>0</b>: Show all grid points (default). The boundary emerges as a color transition.</p><p><b>0.1-0.3</b>: Show only grid points near the decision boundary. Fewer points, cleaner boundary visualization.</p><p><b>0.5+</b>: Show only the most uncertain points — the boundary itself.</p></>} />
+    <ClampedInput value={classification.indecisionThreshold} min={0} max={0.9} step={0.05} ariaLabel="indecision threshold" onChange={setIndecisionThreshold} />
+    <small style={{ color: "var(--text-dim)" }}>
+      {(() => {
+        const probs = classification.boundaryProbabilities;
+        if (!probs) return null;
+        const thresh = classification.indecisionThreshold;
+        let visible = 0;
+        for (let i = 0; i < probs.length; i++) if (probs[i]! >= thresh) visible++;
+        return `${visible} of ${probs.length} shown`;
+      })()}
+    </small>
+  </div>
+  )}
 
       <div className="row vars-row">
-        <HelpPopover content={<><p className="help-title">Predictor Variables</p><p>Select which numeric variables the classifier uses to predict the class.</p><p><b>Which to choose:</b> Include variables you believe distinguish the groups. For visual boundary interpretation, select only 2 — the boundary overlay directly corresponds to those 2 variables.</p><p><b>With 3+ predictors:</b> The classifier still works, but the boundary overlay is computed in the 2D scatter plane and may not reflect the full high-dimensional boundary.</p></>} />
+        <HelpPopover content={<><p className="help-title">Predictor Variables</p><p>Select which numeric variables the classifier uses to predict the class.</p><p><b>Which to choose:</b> Include variables you believe distinguish the groups.</p><p><b>Boundary grid is 2D:</b> Only the first 2 selected predictors vary along the grid axes; any additional predictors are held at their training-set medians. This keeps the grid size manageable (resolution&sup2; not resolution<sup>p</sup>) and the boundary points are always visible in a scatterplot of the first 2 predictors.</p></>} />
         <div className="vars" aria-label="classification variables">
           {numericVars.length === 0 && (
             <span style={{ color: "var(--text-dim)" }}>no numeric variables</span>

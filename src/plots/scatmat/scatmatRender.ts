@@ -44,6 +44,10 @@ function drawMarker(
     ctx.lineTo(x - s, y + s);
     ctx.stroke();
     return;
+  } else if (shape === 6) {
+    ctx.arc(x, y, r * 1.15, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
   } else {
     ctx.arc(x, y, r, 0, Math.PI * 2);
   }
@@ -134,6 +138,25 @@ export interface VisualState {
   shape: Uint8Array;
   shadow: Uint8Array;
   paintPalette: ReadonlyArray<string>;
+  /**
+   * Per-row mask: 1 = render this row as an X (misclassified glyph). Owned
+   * by the classification slice; selection.shape is left alone.
+   */
+  misclassifiedMask?: Uint8Array | null;
+}
+
+/**
+ * Cell-local decision boundary overlay. Coords are already in this cell's
+ * data space (caller plucks the right axes out of boundaryGrid before
+ * passing them in).
+ */
+export interface ScatmatBoundaryOverlay {
+  x: Float64Array;
+  y: Float64Array;
+  paint: Uint8Array;
+  probabilities: Float32Array;
+  indecisionThreshold: number;
+  paintPalette: ReadonlyArray<string>;
 }
 
 export interface BrushOverlay {
@@ -175,6 +198,7 @@ export function drawCell(
   scagHighlight: ScatmatScagHighlight | null = null,
   xVar?: string,
   yVar?: string,
+  boundaryOverlay: ScatmatBoundaryOverlay | null = null,
 ): void {
   const ir = innerRect(cell);
 
@@ -206,6 +230,10 @@ export function drawCell(
 
   drawEdges(ctx, edgeOverlay, toPx, xValues, xMissing, yValues, yMissing, visual.shadow);
 
+  const misMask = visual.misclassifiedMask;
+  const shapeAt = (i: number): number =>
+    misMask && misMask[i] ? 5 : (visual.shape[i] ?? 0);
+
   // pass 1: shadowed (faint)
   for (let i = 0; i < n; i++) {
     if (bitGet(xMissing, i) || bitGet(yMissing, i)) continue;
@@ -217,7 +245,8 @@ export function drawCell(
       ? (visual.paintPalette[paintIdx - 1] ?? visual.color[i] ?? "#cccccc")
       : (visual.color[i] ?? "#cccccc");
     ctx.fillStyle = fill;
-    drawMarker(ctx, px, py, POINT_R, visual.shape[i] ?? 0);
+    ctx.strokeStyle = fill;
+    drawMarker(ctx, px, py, POINT_R, shapeAt(i));
   }
   ctx.globalAlpha = 1;
 
@@ -232,7 +261,8 @@ export function drawCell(
       : (visual.color[i] ?? "#cccccc");
     const { px, py } = toPx(xValues[i]!, yValues[i]!);
     ctx.fillStyle = fill;
-    drawMarker(ctx, px, py, POINT_R, visual.shape[i] ?? 0);
+    ctx.strokeStyle = fill;
+    drawMarker(ctx, px, py, POINT_R, shapeAt(i));
   }
   ctx.globalAlpha = 1;
 
@@ -245,11 +275,37 @@ export function drawCell(
     ctx.globalAlpha = HALO_ALPHA;
     ctx.strokeStyle = "#ffd400";
     ctx.lineWidth = 1.5;
-    drawMarker(ctx, px, py, HALO_R, visual.shape[i] ?? 0, true);
+    drawMarker(ctx, px, py, HALO_R, shapeAt(i), true);
   }
   ctx.globalAlpha = 1;
 
-  // pass 4: brush overlay (only for the active cell)
+  // pass 4: decision boundary overlay (outline rings)
+  if (boundaryOverlay) {
+    const bx = boundaryOverlay.x;
+    const by = boundaryOverlay.y;
+    const bp = boundaryOverlay.paint;
+    const bprob = boundaryOverlay.probabilities;
+    const thresh = boundaryOverlay.indecisionThreshold;
+    const palette = boundaryOverlay.paintPalette;
+    const ringR = Math.max(2.5, POINT_R * 1.6);
+    ctx.lineWidth = 1.6;
+    ctx.globalAlpha = 0.95;
+    for (let i = 0; i < bx.length; i++) {
+      if (bp[i]! === 0) continue;
+      if (bprob[i]! < thresh) continue;
+      const xv = bx[i]!;
+      const yv = by[i]!;
+      if (!Number.isFinite(xv) || !Number.isFinite(yv)) continue;
+      const { px, py } = toPx(xv, yv);
+      ctx.strokeStyle = palette[bp[i]! - 1] ?? "#cccccc";
+      ctx.beginPath();
+      ctx.arc(px, py, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // pass 5: brush overlay (only for the active cell)
   drawBrushOverlay(ctx, activeBrush);
 }
 

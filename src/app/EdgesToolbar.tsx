@@ -6,7 +6,7 @@ import type { EdgeColorMode, EdgeEditMode } from "@/store/types";
 const COLOR_MODES: { value: EdgeColorMode; label: string }[] = [
   { value: "fixed", label: "Fixed" },
   { value: "endpoint", label: "Endpoint" },
-  { value: "paint", label: "Paint" },
+  { value: "paint", label: "Brushed groups" },
   { value: "attribute", label: "Attribute" },
 ];
 

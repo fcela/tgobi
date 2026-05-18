@@ -2,6 +2,7 @@ import createRegl from "regl";
 import type { Regl, DrawCommand } from "regl";
 import type {
   BiplotOverlay,
+  BoundaryOverlay,
   BrushOverlay,
   DensityOverlay,
   EdgeOverlay,
@@ -448,6 +449,7 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
     biplotOverlay: BiplotOverlay | null = null,
     rugOverlay: RugOverlay | null = null,
     loessOverlay: LoessOverlay | null = null,
+    boundaryOverlay: BoundaryOverlay | null = null,
   ): void {
   if (!this.#regl || !this.#drawPoints) return;
   const n = this.#count;
@@ -480,10 +482,13 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
   const shapeIdx = visual.shape[i] ?? 0;
   const shape = shapeIdx <= 1 ? 1 : shapeIdx;
 
+  const misclassified = visual.misclassifiedMask && visual.misclassifiedMask[i] ? 1 : 0;
+  const finalShape = misclassified ? 5 : shape; // X cross for misclassified
+
   let f = isMissing ? 1 : 0;
   f += (isShadow ? 1 : 0) << 1;
   f += (isSelected ? 1 : 0) << 2;
-  f += shape << 3;
+  f += finalShape << 3;
   flagsData[i] = f;
 
     if (paintIdx > 0) {
@@ -540,6 +545,7 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
     this.#overlayCtx.strokeStyle = "#2a2a2a";
     this.#overlayCtx.lineWidth = 1;
     this.#overlayCtx.strokeRect(MARGIN + 0.5, MARGIN + 0.5, this.#w - 2 * MARGIN, this.#h - 2 * MARGIN);
+    this.#drawBoundaryOverlay(boundaryOverlay, visual.pointSize);
     drawBrushOverlay(this.#overlayCtx, activeBrush);
 
     // Marginal/rug glyphs
@@ -666,6 +672,43 @@ export class Regl2DScatterRenderer implements ScatterRenderer {
       ctx.beginPath();
       ctx.moveTo(plotLeft, py);
       ctx.lineTo(plotLeft + length, py);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  #drawBoundaryOverlay(overlay: BoundaryOverlay | null, basePointSize: number): void {
+    if (!overlay || !this.#overlayCtx) return;
+    const ctx = this.#overlayCtx;
+    const view = this.getViewBounds();
+    const innerW = Math.max(1, this.#w - 2 * MARGIN);
+    const innerH = Math.max(1, this.#h - 2 * MARGIN);
+    const xRange = view.xMax - view.xMin;
+    const yRange = view.yMax - view.yMin;
+    if (xRange === 0 || yRange === 0) return;
+    // Bigger, bolder rings so they read clearly over dense data points
+    // (matters especially in tour mode where boundary points overlap with
+    // many real points).
+    const ringR = Math.max(3, basePointSize * 1.5);
+    const palette = overlay.paintPalette;
+    const thresh = overlay.indecisionThreshold;
+    const bx = overlay.x;
+    const by = overlay.y;
+    const bp = overlay.paint;
+    const bprob = overlay.probabilities;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.95;
+    for (let i = 0; i < bx.length; i++) {
+      if (bp[i]! === 0) continue;
+      if (bprob[i]! < thresh) continue;
+      const xv = bx[i]!;
+      const yv = by[i]!;
+      if (!Number.isFinite(xv) || !Number.isFinite(yv)) continue;
+      const px = MARGIN + ((xv - view.xMin) / xRange) * innerW;
+      const py = MARGIN + (1 - (yv - view.yMin) / yRange) * innerH;
+      ctx.strokeStyle = palette[bp[i]! - 1] ?? "#cccccc";
+      ctx.beginPath();
+      ctx.arc(px, py, ringR, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;

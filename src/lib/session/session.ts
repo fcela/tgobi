@@ -1,6 +1,7 @@
 import type { AppStore } from "@/store/types";
 import type { Column, DataFrame } from "@/lib/data/types";
 import { ArrayDataFrame } from "@/lib/data/dataframe";
+import { DEFAULT_MAPPER_PARAMS } from "@/lib/mapper";
 import {
   makeNumericColumn,
   makeIntegerColumn,
@@ -46,6 +47,8 @@ export interface SerializedState {
     ppIndex: AppStore["tour"]["ppIndex"];
     speed: AppStore["tour"]["speed"];
     activeVars: string[];
+    activeXVars: string[];
+    activeYVars: string[];
     frozenVars: string[];
     manualVar: string | null;
     manualValue: number;
@@ -64,19 +67,14 @@ export interface SerializedState {
     xi: number;
     kMax: number;
   };
-  classification: {
-    method: AppStore["classification"]["method"];
-    variables: string[];
-    classSource: string;
-    gridResolution: number;
-    knnK: number;
-    rfNEstimators: number;
-    rfMaxDepth: number;
-    lrLambda: number;
-    lrMaxIter: number;
-    trainRatio: number;
-    useTrainTestSplit: boolean;
-  };
+classification: {
+  method: AppStore["classification"]["method"];
+  variables: string[]; classSource: string; gridResolution: number;
+  gridMode: AppStore["classification"]["gridMode"];
+  knnK: number; rfNEstimators: number; rfMaxDepth: number;
+  lrLambda: number; lrMaxIter: number; trainRatio: number;
+  useTrainTestSplit: boolean; indecisionThreshold: number;
+};
   projection: {
     method: AppStore["projection"]["method"];
     variables: string[];
@@ -94,6 +92,8 @@ export interface SerializedState {
     sortDescending: boolean;
     filterMeasure: AppStore["scagnostics"]["filterMeasure"];
     filterThreshold: number;
+    scatmatReorderBy: AppStore["scagnostics"]["scatmatReorderBy"];
+    scatmatReorderDescending: boolean;
   };
   mapper: {
     params: AppStore["mapper"]["params"];
@@ -175,6 +175,8 @@ export function exportSession(store: AppStore): SessionFile {
         ppIndex: store.tour.ppIndex,
         speed: store.tour.speed,
         activeVars: store.tour.activeVars,
+        activeXVars: store.tour.activeXVars,
+        activeYVars: store.tour.activeYVars,
         frozenVars: store.tour.frozenVars,
         manualVar: store.tour.manualVar,
         manualValue: store.tour.manualValue,
@@ -198,14 +200,16 @@ export function exportSession(store: AppStore): SessionFile {
         variables: store.classification.variables,
         classSource: store.classification.classSource,
         gridResolution: store.classification.gridResolution,
+        gridMode: store.classification.gridMode,
         knnK: store.classification.knnK,
         rfNEstimators: store.classification.rfNEstimators,
         rfMaxDepth: store.classification.rfMaxDepth,
         lrLambda: store.classification.lrLambda,
         lrMaxIter: store.classification.lrMaxIter,
-        trainRatio: store.classification.trainRatio,
-        useTrainTestSplit: store.classification.useTrainTestSplit,
-      },
+    trainRatio: store.classification.trainRatio,
+    useTrainTestSplit: store.classification.useTrainTestSplit,
+    indecisionThreshold: store.classification.indecisionThreshold,
+  },
       projection: {
         method: store.projection.method,
         variables: store.projection.variables,
@@ -217,13 +221,15 @@ export function exportSession(store: AppStore): SessionFile {
         dimX: store.projection.dimX,
         dimY: store.projection.dimY,
       },
-      scagnostics: {
-        variables: store.scagnostics.variables,
-        sortMeasure: store.scagnostics.sortMeasure,
-        sortDescending: store.scagnostics.sortDescending,
-        filterMeasure: store.scagnostics.filterMeasure,
-        filterThreshold: store.scagnostics.filterThreshold,
-      },
+  scagnostics: {
+    variables: store.scagnostics.variables,
+    sortMeasure: store.scagnostics.sortMeasure,
+    sortDescending: store.scagnostics.sortDescending,
+    filterMeasure: store.scagnostics.filterMeasure,
+    filterThreshold: store.scagnostics.filterThreshold,
+    scatmatReorderBy: store.scagnostics.scatmatReorderBy,
+    scatmatReorderDescending: store.scagnostics.scatmatReorderDescending,
+  },
       mapper: {
         params: store.mapper.params,
         colorBy: store.mapper.colorBy,
@@ -268,6 +274,8 @@ export function importSession(file: SessionFile): { df: DataFrame; state: Partia
         isPlaying: false,
         speed: s.tour.speed,
         activeVars: s.tour.activeVars,
+        activeXVars: s.tour.activeXVars ?? [],
+        activeYVars: s.tour.activeYVars ?? [],
         frozenVars: s.tour.frozenVars,
         manualVar: s.tour.manualVar,
         manualValue: s.tour.manualValue,
@@ -311,21 +319,25 @@ export function importSession(file: SessionFile): { df: DataFrame; state: Partia
         variables: s.classification.variables,
         classSource: s.classification.classSource,
         gridResolution: s.classification.gridResolution,
+        gridMode: s.classification.gridMode ?? "2d",
+        effectiveGridResolution: 0,
+        gridTotal: 0,
         knnK: s.classification.knnK,
         rfNEstimators: s.classification.rfNEstimators,
         rfMaxDepth: s.classification.rfMaxDepth,
         lrLambda: s.classification.lrLambda,
         lrMaxIter: s.classification.lrMaxIter,
         trainRatio: s.classification.trainRatio,
-        useTrainTestSplit: s.classification.useTrainTestSplit,
-        boundaryPaint: null,
+    useTrainTestSplit: s.classification.useTrainTestSplit,
+    indecisionThreshold: s.classification.indecisionThreshold ?? 0,
+    boundaryPaint: null,
         boundaryGrid: null,
+        boundaryVars: null,
         gridSize: 0,
         boundaryMins: null,
         boundaryMaxs: null,
     boundariesVisible: false,
     boundaryProbabilities: null,
-    boundaryNOrig: 0,
         predictions: null,
         misclassified: null,
         classToPaint: null,
@@ -336,7 +348,6 @@ export function importSession(file: SessionFile): { df: DataFrame; state: Partia
         accuracy: null,
         perClassMetrics: null,
         featureImportance: null,
-        preClassifyShape: null,
         cvResult: null,
       },
       projection: {
@@ -362,18 +373,22 @@ export function importSession(file: SessionFile): { df: DataFrame; state: Partia
         morphPlaying: false,
         quality: null,
       },
-      scagnostics: {
-        variables: s.scagnostics.variables,
-        results: null,
-        running: false,
-        error: null,
-        sortMeasure: s.scagnostics.sortMeasure,
-        sortDescending: s.scagnostics.sortDescending,
-        filterMeasure: s.scagnostics.filterMeasure,
-        filterThreshold: s.scagnostics.filterThreshold,
-      },
+    scagnostics: {
+      variables: s.scagnostics.variables,
+      results: null,
+      running: false,
+      error: null,
+      sortMeasure: s.scagnostics.sortMeasure,
+      sortDescending: s.scagnostics.sortDescending,
+      filterMeasure: s.scagnostics.filterMeasure,
+      filterThreshold: s.scagnostics.filterThreshold,
+      scatmatReorderBy: s.scagnostics.scatmatReorderBy ?? null,
+      scatmatReorderDescending: s.scagnostics.scatmatReorderDescending ?? true,
+    },
     mapper: {
-      params: s.mapper.params,
+      // Merge with defaults so sessions saved before clusterMethod /
+      // clusterLinkage / clusterEps / clusterMinPts existed still load cleanly.
+      params: { ...DEFAULT_MAPPER_PARAMS, ...s.mapper.params },
       graph: null,
       running: false,
       error: null,

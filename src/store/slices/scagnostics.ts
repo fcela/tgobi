@@ -27,6 +27,8 @@ export const createScagnosticsSlice: StateCreator<AppStore, [], [], ScagnosticsS
     sortDescending: true,
     filterThreshold: 0,
     filterMeasure: "clumpy" as ScagnosticMeasure,
+    scatmatReorderBy: null,
+    scatmatReorderDescending: true,
   },
 
   setScagnosticsVariables: (variables: string[]) =>
@@ -97,6 +99,12 @@ export const createScagnosticsSlice: StateCreator<AppStore, [], [], ScagnosticsS
   setScagnosticsFilterThreshold: (threshold: number) =>
     set((s) => ({ scagnostics: { ...s.scagnostics, filterThreshold: threshold } })),
 
+  setScagnosticsScatmatReorderBy: (measure: ScagnosticMeasure | null) =>
+    set((s) => ({ scagnostics: { ...s.scagnostics, scatmatReorderBy: measure } })),
+
+  setScagnosticsScatmatReorderDescending: (desc: boolean) =>
+    set((s) => ({ scagnostics: { ...s.scagnostics, scatmatReorderDescending: desc } })),
+
   clearScagnostics: () =>
     set(() => ({
       scagnostics: {
@@ -108,6 +116,8 @@ export const createScagnosticsSlice: StateCreator<AppStore, [], [], ScagnosticsS
         sortDescending: true,
         filterThreshold: 0,
         filterMeasure: "clumpy" as ScagnosticMeasure,
+        scatmatReorderBy: null,
+        scatmatReorderDescending: true,
       },
     })),
 });

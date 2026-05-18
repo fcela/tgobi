@@ -6,22 +6,21 @@ import { randomForestClassify } from "@/lib/classification/randomforest";
 import { logisticRegressionClassify } from "@/lib/classification/logistic";
 import { computeConfusionMatrix } from "@/lib/classification/confusion";
 import { crossValidate } from "@/lib/classification/crossvalidation";
+import { buildGrid2D, buildGridND, thinToBoundary2D, thinToBoundaryND } from "@/lib/classification/grid";
 import { bitGet, bitSet } from "@/lib/brush/hitTest";
 import { ArrayDataFrame } from "@/lib/data/dataframe";
 import { makeNumericColumn, makeCategoricalColumn } from "@/lib/data/columns";
 import { BitMissingMask } from "@/lib/data/missing";
 
-const MISCLASSIFIED_SHAPE = 5;
-const BOUNDARY_SHAPE = 6;
-
 const CLEAR_FIELDS = {
-  boundaryPaint: null, boundaryGrid: null, gridSize: 0,
+  boundaryPaint: null, boundaryGrid: null, boundaryVars: null, gridSize: 0,
   boundaryMins: null, boundaryMaxs: null, boundariesVisible: false,
-  boundaryProbabilities: null, boundaryNOrig: 0,
+  boundaryProbabilities: null,
+  effectiveGridResolution: 0, gridTotal: 0,
   predictions: null, misclassified: null, classToPaint: null,
   error: null, confusionMatrix: null, classLabels: null,
   accuracy: null, perClassMetrics: null, featureImportance: null,
-  preClassifyShape: null, cvResult: null,
+  cvResult: null,
 };
 
 export const createClassificationSlice: StateCreator<AppStore, [], [], ClassificationSlice> = (set, get) => ({
@@ -29,6 +28,9 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
     method: "knn",
     variables: [],
     classSource: "paint",
+    gridMode: "2d",
+    effectiveGridResolution: 0,
+    gridTotal: 0,
     gridResolution: 5,
     knnK: 5,
     rfNEstimators: 50,
@@ -39,12 +41,13 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
     useTrainTestSplit: false,
     boundaryPaint: null,
     boundaryGrid: null,
+    boundaryVars: null,
     gridSize: 0,
     boundaryMins: null,
     boundaryMaxs: null,
   boundariesVisible: false,
   boundaryProbabilities: null,
-  boundaryNOrig: 0,
+  indecisionThreshold: 0,
   predictions: null,
     misclassified: null,
     classToPaint: null,
@@ -55,7 +58,6 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
     accuracy: null,
     perClassMetrics: null,
     featureImportance: null,
-    preClassifyShape: null,
     cvResult: null,
   },
 
@@ -70,6 +72,9 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
 
   setClassificationGridResolution: (gridResolution) =>
     set((s) => ({ classification: { ...s.classification, gridResolution, ...CLEAR_FIELDS } })),
+
+  setClassificationGridMode: (gridMode) =>
+    set((s) => ({ classification: { ...s.classification, gridMode, ...CLEAR_FIELDS } })),
 
   setClassificationKnnK: (knnK) =>
     set((s) => ({ classification: { ...s.classification, knnK, boundaryPaint: null, error: null } })),
@@ -92,9 +97,14 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
   setClassificationUseTrainTestSplit: (useTrainTestSplit) =>
     set((s) => ({ classification: { ...s.classification, useTrainTestSplit, ...CLEAR_FIELDS } })),
 
+  // Renderers filter boundary points by this threshold at draw time, so a
+  // plain setter is enough — no re-apply/re-run.
+  setIndecisionThreshold: (indecisionThreshold) =>
+    set((s) => ({ classification: { ...s.classification, indecisionThreshold } })),
+
   runClassification: () => {
     const { df } = get();
-    const { method, variables, classSource, gridResolution, knnK, rfNEstimators, rfMaxDepth, lrLambda, lrMaxIter, useTrainTestSplit, trainRatio } = get().classification;
+    const { method, variables, classSource, gridMode, gridResolution, knnK, rfNEstimators, rfMaxDepth, lrLambda, lrMaxIter, useTrainTestSplit, trainRatio } = get().classification;
     const { paint, shadow } = get().selection;
 
     if (!df || variables.length < 2) {
@@ -155,6 +165,10 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
 
         const allX: number[][] = [];
         const allY: number[] = [];
+        // df row index for each entry in allX/allY. Needed to write predictions
+        // back to the correct dataframe rows when (a) some labeled rows are
+        // dropped for invalid features, or (b) train/test split reorders rows.
+        const allDfRows: number[] = [];
         for (let ti = 0; ti < labeledRows.length; ti++) {
           const i = labeledRows[ti]!;
           const row: number[] = [];
@@ -170,6 +184,7 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
           if (valid) {
             allX.push(row);
             allY.push(labeledY[ti]!);
+            allDfRows.push(i);
           }
         }
 
@@ -180,9 +195,10 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
 
         let trainX: number[][];
         let trainY: number[];
+        let trainDfRows: number[];
         let testX: number[][] | null = null;
         let testY: number[] | null = null;
-        let testRowIndices: number[] | null = null;
+        let testDfRows: number[] | null = null;
 
         if (useTrainTestSplit && allX.length >= 4) {
           const byClass = new Map<number, number[]>();
@@ -202,12 +218,14 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
           }
           trainX = trainIdx.map((i) => allX[i]!);
           trainY = trainIdx.map((i) => allY[i]!);
+          trainDfRows = trainIdx.map((i) => allDfRows[i]!);
           testX = testIdx.map((i) => allX[i]!);
           testY = testIdx.map((i) => allY[i]!);
-          testRowIndices = testIdx;
+          testDfRows = testIdx.map((i) => allDfRows[i]!);
         } else {
           trainX = allX;
           trainY = allY;
+          trainDfRows = allDfRows;
         }
 
         const mins = new Float64Array(p);
@@ -228,41 +246,111 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
             for (const row of trainX) {
               row[j] = row[j]! + (Math.random() - 0.5) * jitter;
             }
+            maxs[j] = mins[j]! + jitter;
           }
         }
 
-        const { grid: gridPts, flat: gridFlat } = buildGrid(mins, maxs, gridResolution);
-        const predictPts = testX ? [...trainX, ...testX, ...gridPts] : [...trainX, ...gridPts];
-        const nTrain = trainX.length;
-        const nTest = testX ? testX.length : 0;
-        const nGrid = gridPts.length;
+        const medians = new Float64Array(p);
+        for (let j = 0; j < p; j++) {
+          const vals = trainX.map((r) => r[j]!).sort((a, b) => a - b);
+          const mid = Math.floor(vals.length / 2);
+          medians[j] = vals.length % 2 === 0
+            ? (vals[mid - 1]! + vals[mid]!) / 2
+            : vals[mid]!;
+        }
 
-        const result = method === "knn"
-          ? knnClassify(trainX, trainY, predictPts, knnK)
+        const built = gridMode === "fullspace"
+          ? buildGridND(mins, maxs, gridResolution)
+          : buildGrid2D(mins, maxs, gridResolution, medians);
+        const { grid: gridPts, flat: gridFlat, effectiveResolution, gridDims } = built;
+        const nGrid = gridPts.length;
+        const gridPredictions = new Int16Array(nGrid);
+        const gridMaxProbs = new Float32Array(nGrid);
+
+        const gridOnlyResult = method === "knn"
+          ? knnClassify(trainX, trainY, gridPts, knnK)
           : method === "naivebayes"
-          ? naiveBayesClassify(trainX, trainY, predictPts)
+          ? naiveBayesClassify(trainX, trainY, gridPts)
           : method === "logistic"
-          ? logisticRegressionClassify(trainX, trainY, predictPts, lrLambda, lrMaxIter)
-          : randomForestClassify(trainX, trainY, predictPts, rfNEstimators, rfMaxDepth);
+          ? logisticRegressionClassify(trainX, trainY, gridPts, lrLambda, lrMaxIter)
+          : randomForestClassify(trainX, trainY, gridPts, rfNEstimators, rfMaxDepth);
+
+        const gridNClasses = gridOnlyResult.nClasses;
+        for (let i = 0; i < nGrid; i++) {
+          gridPredictions[i] = gridOnlyResult.predictions[i]!;
+          let m = 0;
+          for (let c = 0; c < gridNClasses; c++) {
+            const pr = gridOnlyResult.probabilities[i * gridNClasses + c]!;
+            if (pr > m) m = pr;
+          }
+          gridMaxProbs[i] = m;
+        }
+
+        const boundaryMask = gridMode === "fullspace"
+          ? thinToBoundaryND(gridPredictions, effectiveResolution, gridDims)
+          : thinToBoundary2D(gridPredictions, effectiveResolution);
+
+        const nBoundary = boundaryMask.reduce((s, v) => s + v, 0);
+        const boundaryIndices: number[] = [];
+        for (let i = 0; i < nGrid; i++) {
+          if (boundaryMask[i]) boundaryIndices.push(i);
+        }
+
+        const boundaryFlat = new Float64Array(nBoundary * p);
+        const boundaryPaint = new Uint8Array(nBoundary);
+        const boundaryProbabilities = new Float32Array(nBoundary);
+        for (let b = 0; b < nBoundary; b++) {
+          const gIdx = boundaryIndices[b]!;
+          for (let j = 0; j < p; j++) {
+            boundaryFlat[b * p + j] = gridFlat[gIdx * p + j]!;
+          }
+          const cls = gridPredictions[gIdx]!;
+          if (cls >= 0 && cls < classToPaint.length) {
+            boundaryPaint[b] = classToPaint[cls]!;
+          }
+          boundaryProbabilities[b] = 1 - gridMaxProbs[gIdx]!;
+        }
+
+        const trainPredictResult = method === "knn"
+          ? knnClassify(trainX, trainY, trainX, knnK)
+          : method === "naivebayes"
+          ? naiveBayesClassify(trainX, trainY, trainX)
+          : method === "logistic"
+          ? logisticRegressionClassify(trainX, trainY, trainX, lrLambda, lrMaxIter)
+          : randomForestClassify(trainX, trainY, trainX, rfNEstimators, rfMaxDepth);
+
+        let testPredictResult: typeof trainPredictResult | null = null;
+        if (testX && testX.length > 0) {
+          const allPredictPts = [...trainX, ...testX];
+          const allPredictResult = method === "knn"
+            ? knnClassify(trainX, trainY, allPredictPts, knnK)
+            : method === "naivebayes"
+            ? naiveBayesClassify(trainX, trainY, allPredictPts)
+            : method === "logistic"
+            ? logisticRegressionClassify(trainX, trainY, allPredictPts, lrLambda, lrMaxIter)
+            : randomForestClassify(trainX, trainY, allPredictPts, rfNEstimators, rfMaxDepth);
+          testPredictResult = allPredictResult;
+        }
 
         const predictions = new Int16Array(n);
         predictions.fill(-1);
         const misclassified = new Uint8Array(n);
 
         for (let ti = 0; ti < trainX.length; ti++) {
-          const rowIdx = labeledRows[ti]!;
-          const pred = result.predictions[ti]!;
+          const rowIdx = trainDfRows[ti]!;
+          const pred = trainPredictResult.predictions[ti]!;
           predictions[rowIdx] = pred;
           if (pred !== trainY[ti]) {
             misclassified[rowIdx] = 1;
           }
         }
 
-        if (testX && testRowIndices) {
+        if (testX && testDfRows && testPredictResult) {
+          const nTrain2 = trainX.length;
           for (let ti = 0; ti < testX.length; ti++) {
-            const absIdx = nTrain + ti;
-            const pred = result.predictions[absIdx]!;
-            const rowIdx = labeledRows[testRowIndices[ti]!]!;
+            const absIdx = nTrain2 + ti;
+            const pred = testPredictResult.predictions[absIdx]!;
+            const rowIdx = testDfRows[ti]!;
             predictions[rowIdx] = pred;
             if (pred !== testY![ti]!) {
               misclassified[rowIdx] = 1;
@@ -270,17 +358,7 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
           }
         }
 
-  const boundaryPaint = new Uint8Array(nGrid);
-  const boundaryProbabilities = new Float32Array(nGrid);
-  const gridOffset = nTrain + nTest;
-  for (let i = 0; i < nGrid; i++) {
-    const cls = result.predictions[gridOffset + i]!;
-    if (cls >= 0 && cls < classToPaint.length) {
-      boundaryPaint[i] = classToPaint[cls]!;
-    }
-    const maxProb = result.probabilities ? result.probabilities[gridOffset + i]! : 1;
-    boundaryProbabilities[i] = 1 - maxProb;
-  }
+        const featureImportance = trainPredictResult.featureImportance ?? null;
 
         const classLabels: string[] = [];
         if (classSource === "paint") {
@@ -299,39 +377,40 @@ export const createClassificationSlice: StateCreator<AppStore, [], [], Classific
           }
         }
 
-        const evalPreds: Int16Array = testX
-          ? result.predictions.slice(nTrain, nTrain + nTest)
-          : result.predictions.slice(0, nTrain);
+        const evalPreds: Int16Array = testX && testPredictResult
+          ? testPredictResult.predictions.slice(trainX.length, trainX.length + testX.length)
+          : trainPredictResult.predictions.slice(0, trainX.length);
         const evalActuals: Int16Array = testX
           ? Int16Array.from(testY!)
           : Int16Array.from(trainY);
         const cm = computeConfusionMatrix(evalActuals, evalPreds, classLabels);
 
-        const featureImportance = result.featureImportance ?? null;
-
         const cvResult = crossValidate(allX, allY, method, 5, { knnK, rfNEstimators, rfMaxDepth, lrLambda, lrMaxIter });
 
-set((s) => ({
-        classification: {
-          ...s.classification,
-          boundaryPaint,
-          boundaryGrid: gridFlat,
-          gridSize: nGrid,
-          boundaryMins: mins,
-          boundaryMaxs: maxs,
-          boundaryProbabilities,
-          predictions,
-          misclassified,
-          classToPaint,
-          running: false,
-          confusionMatrix: cm.matrix,
-          classLabels: cm.classLabels,
-          accuracy: cm.overallAccuracy,
-          perClassMetrics: cm.perClass,
-          featureImportance,
-          cvResult,
-        },
-      }));
+        set((s) => ({
+          classification: {
+            ...s.classification,
+            boundaryPaint,
+            boundaryGrid: boundaryFlat,
+            boundaryVars: variables.slice(),
+            gridSize: nBoundary,
+            effectiveGridResolution: effectiveResolution,
+            gridTotal: nGrid,
+            boundaryMins: mins,
+            boundaryMaxs: maxs,
+            boundaryProbabilities,
+            predictions,
+            misclassified,
+            classToPaint,
+            running: false,
+            confusionMatrix: cm.matrix,
+            classLabels: cm.classLabels,
+            accuracy: cm.overallAccuracy,
+            perClassMetrics: cm.perClass,
+            featureImportance,
+            cvResult,
+          },
+        }));
     } catch (e) {
     set((s) => ({
       classification: {
@@ -345,205 +424,38 @@ set((s) => ({
   },
 
   applyClassificationBoundaries: () => {
-    const { misclassified, classToPaint, classSource, predictions,
-      boundaryPaint, boundaryGrid, gridSize, boundaryProbabilities, variables } = get().classification;
-    const { df } = get();
-    if (!df || !boundaryPaint || !boundaryGrid || gridSize === 0) return;
-
-    const nOrig = df.nrow;
-    const origShape = get().selection.shape;
-    const origPaint = get().selection.paint;
-    const origShadow = get().selection.shadow;
-    const preClassifyShape = new Uint8Array(origShape.length);
-    preClassifyShape.set(origShape);
-
-    const BOUNDARY_INDECISION_THRESHOLD = 0;
-    const nVars = variables.length;
-
-    const boundaryIndices: number[] = [];
-    for (let i = 0; i < gridSize; i++) {
-      if (boundaryPaint[i]! > 0) {
-        boundaryIndices.push(i);
-      }
-    }
-    const nBoundary = boundaryIndices.length;
-
-    const newCols = df.columns.map((col) => {
-      if (col.type === "numeric") {
-        const orig = col.values as Float64Array;
-        const arr = new Float64Array(nOrig + nBoundary);
-        arr.set(orig);
-        const vIdx = variables.indexOf(col.name);
-        if (vIdx >= 0) {
-          for (let b = 0; b < nBoundary; b++) {
-            arr[nOrig + b] = boundaryGrid[boundaryIndices[b]! * nVars + vIdx]!;
-          }
-        }
-        return makeNumericColumn(col.name, arr, new BitMissingMask(nOrig + nBoundary));
-      }
-      if (col.type === "integer") {
-        const orig = col.values as Int32Array;
-        const arr = new Float64Array(nOrig + nBoundary);
-        for (let i = 0; i < nOrig; i++) arr[i] = orig[i]!;
-        const vIdx = variables.indexOf(col.name);
-        if (vIdx >= 0) {
-          for (let b = 0; b < nBoundary; b++) {
-            arr[nOrig + b] = boundaryGrid[boundaryIndices[b]! * nVars + vIdx]!;
-          }
-        }
-        return makeNumericColumn(col.name, arr, new BitMissingMask(nOrig + nBoundary));
-      }
-      if (col.type === "categorical") {
-        const orig = col.codes as Int32Array;
-        const arr = new Int32Array(nOrig + nBoundary);
-        arr.set(orig);
-        for (let b = 0; b < nBoundary; b++) arr[nOrig + b] = 0;
-        return makeCategoricalColumn(col.name, arr, [...col.levels!]);
-      }
-      return col;
-    });
-    const newDf = new ArrayDataFrame(newCols);
-
-    const newShape = new Uint8Array(nOrig + nBoundary);
-    newShape.set(origShape);
-    if (misclassified) {
-      for (let i = 0; i < nOrig; i++) {
-        if (misclassified[i]) newShape[i] = MISCLASSIFIED_SHAPE;
-      }
-    }
-    for (let b = 0; b < nBoundary; b++) newShape[nOrig + b] = BOUNDARY_SHAPE;
-
-    const newPaint = new Uint8Array(nOrig + nBoundary);
-    if (classSource !== "paint" && predictions && classToPaint) {
-      for (let i = 0; i < nOrig; i++) {
-        const cls = predictions[i]!;
-        newPaint[i] = (cls >= 0 && cls < classToPaint.length) ? classToPaint[cls]! : (origPaint[i] ?? 0);
-      }
-    } else {
-      newPaint.set(origPaint);
-    }
-    for (let b = 0; b < nBoundary; b++) {
-      newPaint[nOrig + b] = boundaryPaint[boundaryIndices[b]!]!;
-    }
-
-    const newMask = new Uint8Array(Math.ceil((nOrig + nBoundary) / 8));
-    newMask.set(origShadow);
-
-    const newIdentify = new Uint8Array(nOrig + nBoundary);
-    const newLabel = new Int16Array(nOrig + nBoundary);
-
+    // Boundary points and misclassified flags are consumed directly by
+    // plot renderers from this slice — there is no df mutation. Show / Hide
+    // is just a visibility flag. Threshold + grid changes are picked up
+    // automatically at draw time.
+    const { boundaryPaint, boundaryGrid, gridSize } = get().classification;
+    if (!boundaryPaint || !boundaryGrid || gridSize === 0) return;
     set((s) => ({
-      df: newDf,
-      selection: { ...s.selection, paint: newPaint, shape: newShape, shadow: newMask, mask: new Uint8Array(Math.ceil((nOrig + nBoundary) / 8)), identify: newIdentify, label: newLabel },
+      classification: { ...s.classification, boundariesVisible: true },
       color: { ...s.color, encoding: { kind: "paint" } },
-      classification: { ...s.classification, boundariesVisible: true, preClassifyShape, boundaryNOrig: nOrig },
     }));
   },
 
   clearClassification: () => {
-    const { misclassified, boundariesVisible, preClassifyShape, boundaryNOrig } = get().classification;
-    const { df } = get();
-
-    if (boundariesVisible && df && boundaryNOrig > 0 && df.nrow > boundaryNOrig) {
-      const trimmedCols = df.columns.map((col) => {
-        if (col.type === "numeric") {
-          const orig = col.values as Float64Array;
-          return makeNumericColumn(col.name, orig.slice(0, boundaryNOrig), new BitMissingMask(boundaryNOrig));
-        }
-        if (col.type === "integer") {
-          const orig = col.values as Int32Array;
-          return makeNumericColumn(col.name, Float64Array.from(orig.slice(0, boundaryNOrig)), new BitMissingMask(boundaryNOrig));
-        }
-      if (col.type === "categorical") {
-        const orig = col.codes as Int32Array;
-        return makeCategoricalColumn(col.name, orig.slice(0, boundaryNOrig), [...col.levels!]);
-      }
-        return col;
-      });
-      const trimmedDf = new ArrayDataFrame(trimmedCols);
-
-      const sel = get().selection;
-      const newShape = new Uint8Array(boundaryNOrig);
-      newShape.set(sel.shape.slice(0, boundaryNOrig));
-      if (misclassified && preClassifyShape) {
-        for (let i = 0; i < boundaryNOrig; i++) {
-          if (misclassified[i]) newShape[i] = preClassifyShape[i]!;
-        }
-      }
-      const newPaint = new Uint8Array(boundaryNOrig);
-      newPaint.set(sel.paint.slice(0, boundaryNOrig));
-
-      set((s) => ({
-        df: trimmedDf,
-        selection: {
-          ...s.selection,
-          paint: newPaint,
-          shape: newShape,
-          shadow: sel.shadow.slice(0, Math.ceil(boundaryNOrig / 8)),
-          mask: new Uint8Array(Math.ceil(boundaryNOrig / 8)),
-        },
-        classification: { ...s.classification, boundariesVisible: false, preClassifyShape: null, boundaryNOrig: 0 },
-      }));
-    } else if (boundariesVisible && misclassified && preClassifyShape) {
-      const origShape = get().selection.shape;
-      const newShape = new Uint8Array(origShape.length);
-      newShape.set(origShape);
-      for (let i = 0; i < newShape.length; i++) {
-        if (misclassified[i]) newShape[i] = preClassifyShape[i]!;
-      }
-      set((s) => ({
-        selection: { ...s.selection, shape: newShape },
-        classification: { ...s.classification, boundariesVisible: false, preClassifyShape: null },
-      }));
-    } else {
-      set((s) => ({ classification: { ...s.classification, boundariesVisible: false } }));
-    }
+    set((s) => ({ classification: { ...s.classification, boundariesVisible: false } }));
   },
 
   resetClassification: () => {
-    const { boundaryNOrig, boundariesVisible } = get().classification;
-    const { df } = get();
-    if (boundariesVisible && df && boundaryNOrig > 0 && df.nrow > boundaryNOrig) {
-      get().clearClassification();
-    }
     set(() => ({
       classification: {
         method: "knn", variables: [], classSource: "paint",
+        gridMode: "2d", effectiveGridResolution: 0, gridTotal: 0,
         gridResolution: 5, knnK: 5, rfNEstimators: 50, rfMaxDepth: 10,
         lrLambda: 0.01, lrMaxIter: 200, trainRatio: 0.8, useTrainTestSplit: false,
-        boundaryPaint: null, boundaryGrid: null, gridSize: 0,
+        boundaryPaint: null, boundaryGrid: null, boundaryVars: null, gridSize: 0,
         boundaryMins: null, boundaryMaxs: null, boundariesVisible: false,
-        boundaryProbabilities: null, boundaryNOrig: 0,
+        boundaryProbabilities: null, indecisionThreshold: 0,
         predictions: null, misclassified: null, classToPaint: null,
         running: false, error: null, confusionMatrix: null, classLabels: null,
         accuracy: null, perClassMetrics: null, featureImportance: null,
-        preClassifyShape: null, cvResult: null,
+        cvResult: null,
       },
     }));
   },
 });
 
-function buildGrid(mins: Float64Array, maxs: Float64Array, resolution: number): { grid: number[][]; flat: Float64Array } {
-  const p = mins.length;
-  const steps: number[] = [];
-  for (let j = 0; j < p; j++) {
-    const range = maxs[j]! - mins[j]!;
-    steps.push(range === 0 ? 0 : range / (resolution - 1));
-  }
-
-  const total = Math.pow(resolution, p);
-  const grid: number[][] = [];
-  const flat = new Float64Array(total * p);
-  for (let idx = 0; idx < total; idx++) {
-    const pt: number[] = new Array(p);
-    let remainder = idx;
-    for (let j = 0; j < p; j++) {
-      const digit = remainder % resolution;
-      remainder = Math.floor(remainder / resolution);
-      pt[j] = mins[j]! + digit * (steps[j] ?? 0);
-      flat[idx * p + j] = pt[j]!;
-    }
-    grid.push(pt);
-  }
-  return { grid, flat };
-}

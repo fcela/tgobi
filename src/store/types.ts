@@ -7,7 +7,7 @@ import type { ClassificationMethod } from "@/lib/classification/types";
 import type { ProjectionMethod } from "@/lib/projection/types";
 import type { DendrogramData } from "@/lib/clustering/types";
 import type { ScagnosticMeasure, ScagnosticResult } from "@/lib/scagnostics";
-import type { MapperGraph, FilterFunction, MapperParams } from "@/lib/mapper";
+import type { MapperGraph, FilterFunction, MapperParams, MapperClusterMethod, MapperClusterLinkage } from "@/lib/mapper";
 import type { SweepResult } from "@/lib/mapper/sweep";
 
 export interface DataSlice {
@@ -308,16 +308,18 @@ export interface PlotsSlice {
   resizeSplit: (tileId: TileId, ratio: number) => void;
 }
 
-export type TourShape = "1d" | "2d";
+export type TourShape = "1d" | "2d" | "corr";
 export type TourMode = "grand" | "pp" | "manual" | "guided" | "langevin";
 
 export interface SavedView {
   id: number;
   name: string;
-  panelId: number; // which panel the view applies to
+  panelId: number;
   shape: TourShape;
   vars: string[];
-  basis: Float64Array; // row-major p×k
+  basis: Float64Array;
+  xVars?: string[];
+  yVars?: string[];
 }
 
 export interface TourKeyframe {
@@ -337,6 +339,8 @@ export interface TourSlice {
     isPlaying: boolean;
     speed: number;
     activeVars: string[];
+    activeXVars: string[];
+    activeYVars: string[];
     frozenVars: string[];
     manualVar: string | null;
     manualValue: number;
@@ -363,6 +367,8 @@ export interface TourSlice {
   setTourMode: (mode: TourMode) => void;
   setTourPpIndex: (index: ProjectionPursuitIndex) => void;
   setTourActiveVars: (vars: string[]) => void;
+  setTourActiveXVars: (vars: string[]) => void;
+  setTourActiveYVars: (vars: string[]) => void;
   toggleTourVarFrozen: (name: string) => void;
   setManualVarValue: (name: string, value: number) => void;
   setTourFrame: (basis: Float64Array, proj: Float64Array, t: number, ppValue?: number | null) => void;
@@ -446,11 +452,18 @@ export interface CVResult {
   nFolds: number;
 }
 
+export type ClassificationGridMode = "2d" | "fullspace";
+
 export interface ClassificationSlice {
   classification: {
     method: ClassificationMethod;
     variables: string[];
     classSource: string;
+    gridMode: ClassificationGridMode;
+    /** Effective per-axis resolution used by the most recent run (≤ gridResolution when capped). */
+    effectiveGridResolution: number;
+    /** Total grid points produced by the most recent run. */
+    gridTotal: number;
     gridResolution: number;
     knnK: number;
     rfNEstimators: number;
@@ -461,12 +474,14 @@ export interface ClassificationSlice {
     useTrainTestSplit: boolean;
   boundaryPaint: Uint8Array | null;
   boundaryGrid: Float64Array | null;
+  /** Names of the predictor variables that define the boundary grid axes (snapshot taken when runClassification fired). */
+  boundaryVars: string[] | null;
   gridSize: number;
   boundaryMins: Float64Array | null;
   boundaryMaxs: Float64Array | null;
   boundaryProbabilities: Float32Array | null;
   boundariesVisible: boolean;
-  boundaryNOrig: number;
+  indecisionThreshold: number;
     predictions: Int16Array | null;
     misclassified: Uint8Array | null;
     classToPaint: number[] | null;
@@ -477,13 +492,13 @@ export interface ClassificationSlice {
     accuracy: number | null;
     perClassMetrics: { label: string; precision: number; recall: number; f1: number; support: number }[] | null;
     featureImportance: number[] | null;
-    preClassifyShape: Uint8Array | null;
     cvResult: CVResult | null;
   };
   setClassificationMethod: (method: ClassificationMethod) => void;
   setClassificationVariables: (vars: string[]) => void;
   setClassificationClassSource: (source: string) => void;
   setClassificationGridResolution: (n: number) => void;
+  setClassificationGridMode: (mode: ClassificationGridMode) => void;
   setClassificationKnnK: (k: number) => void;
   setClassificationRfNEstimators: (n: number) => void;
   setClassificationRfMaxDepth: (d: number) => void;
@@ -491,6 +506,7 @@ export interface ClassificationSlice {
   setClassificationLrMaxIter: (maxIter: number) => void;
   setClassificationTrainRatio: (ratio: number) => void;
   setClassificationUseTrainTestSplit: (use: boolean) => void;
+  setIndecisionThreshold: (t: number) => void;
   runClassification: () => void;
   applyClassificationBoundaries: () => void;
   clearClassification: () => void;
@@ -557,6 +573,8 @@ export interface ScagnosticsSlice {
     sortDescending: boolean;
     filterMeasure: ScagnosticMeasure;
     filterThreshold: number;
+    scatmatReorderBy: ScagnosticMeasure | null;
+    scatmatReorderDescending: boolean;
   };
   setScagnosticsVariables: (vars: string[]) => void;
   runScagnostics: () => void;
@@ -564,6 +582,8 @@ export interface ScagnosticsSlice {
   setScagnosticsSortDescending: (desc: boolean) => void;
   setScagnosticsFilterMeasure: (measure: ScagnosticMeasure) => void;
   setScagnosticsFilterThreshold: (threshold: number) => void;
+  setScagnosticsScatmatReorderBy: (measure: ScagnosticMeasure | null) => void;
+  setScagnosticsScatmatReorderDescending: (desc: boolean) => void;
   clearScagnostics: () => void;
 }
 
@@ -583,6 +603,10 @@ export interface MapperSlice {
   setMapperIntervals: (n: number) => void;
   setMapperOverlap: (o: number) => void;
   setMapperClusterK: (k: number) => void;
+  setMapperClusterMethod: (method: MapperClusterMethod) => void;
+  setMapperClusterLinkage: (linkage: MapperClusterLinkage) => void;
+  setMapperClusterEps: (eps: number) => void;
+  setMapperClusterMinPts: (minPts: number) => void;
   setMapperVariables: (vars: string[]) => void;
   runMapper: () => void;
   selectMapperNode: (nodeId: number | null) => void;

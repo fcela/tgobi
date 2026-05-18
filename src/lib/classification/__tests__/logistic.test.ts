@@ -36,4 +36,28 @@ describe("logisticRegressionClassify", () => {
     expect(r.predictions.length).toBe(2);
     expect(r.sizes.reduce((a, b) => a + b, 0)).toBe(2);
   });
+
+  it("returns per-class probabilities that sum to 1", () => {
+    const trainX: number[][] = [];
+    const trainY: number[] = [];
+    for (let i = 0; i < 30; i++) { trainX.push([Math.random(), Math.random()]); trainY.push(0); }
+    for (let i = 0; i < 30; i++) { trainX.push([5 + Math.random(), 5 + Math.random()]); trainY.push(1); }
+    const predictX = [[0.5, 0.5], [3, 3], [5.5, 5.5]];
+    const r = logisticRegressionClassify(trainX, trainY, predictX, 0.01, 500);
+    expect(r.probabilities.length).toBe(predictX.length * r.nClasses);
+    for (let i = 0; i < predictX.length; i++) {
+      let s = 0;
+      for (let c = 0; c < r.nClasses; c++) {
+        const pr = r.probabilities[i * r.nClasses + c]!;
+        expect(pr).toBeGreaterThanOrEqual(0);
+        expect(pr).toBeLessThanOrEqual(1);
+        s += pr;
+      }
+      expect(s).toBeCloseTo(1, 5);
+    }
+    // Decision boundary (around x≈2.5) — probabilities should be close to 0.5.
+    const pBoundary0 = r.probabilities[1 * 2 + 0]!;
+    expect(pBoundary0).toBeGreaterThan(0.1);
+    expect(pBoundary0).toBeLessThan(0.9);
+  });
 });

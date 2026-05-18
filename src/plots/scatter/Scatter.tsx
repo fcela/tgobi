@@ -4,6 +4,7 @@ import { Regl2DScatterRenderer } from "@/plots/scatter/regl2dRenderer";
 import type { ScatterPanel } from "@/store/types";
 import type {
   BiplotOverlay,
+  BoundaryOverlay,
   DensityOverlay,
   HullOverlay,
   LoessOverlay,
@@ -81,7 +82,7 @@ export function Scatter({ panel }: ScatterProps) {
 
   const isTourActive =
     tourActivePanelId === panel.id &&
-    tourShape === "2d" &&
+    (tourShape === "2d" || tourShape === "corr") &&
     tourProj != null &&
     tourProj.length >= 2;
 
@@ -234,6 +235,150 @@ export function Scatter({ panel }: ScatterProps) {
     }
     return { points, color: "#f4a261", alpha: 0.9, width: 2 };
   }, [showLoess, isTourActive, xCol, yCol, xScaled, yScaled, selection.shadow]);
+
+  // Decision-boundary overlay. Projects boundary grid points (kept on the
+  // classification slice) into the panel's current data space — either the
+  // (x, y) axes for a static scatter or the active tour basis when tour is
+  // running. Falls back to null when the panel's axes / tour vars aren't all
+  // predictors of the trained model, or when either axis has scaling on
+  // (we'd need to scale boundary coords with the training distribution).
+  const boundaryOverlay = useMemo<BoundaryOverlay | null>(() => {
+    if (!classification.boundariesVisible) return null;
+    const grid = classification.boundaryGrid;
+    const paintArr = classification.boundaryPaint;
+    const probs = classification.boundaryProbabilities;
+    const bVars = classification.boundaryVars;
+    if (!grid || !paintArr || !probs || !bVars || bVars.length === 0) return null;
+    const nVars = bVars.length;
+    const nPts = (grid.length / nVars) | 0;
+
+    // Tour-active: project boundary through the current basis.
+    if (isTourActive && tour.basis && tour.activeVars.length > 0 && (tour.shape === "2d" || tour.shape === "corr")) {
+      const activeVars = tour.activeVars;
+      const k = 2;
+
+      // The tour worker projects *standardized* data (mean=0, sd=1 over
+      // non-shadowed non-missing rows). Boundary points must be standardized
+      // the same way before going through the basis, or they'd land in a
+      // completely different coordinate range than the data and end up
+      // off-screen. For active vars that aren't predictors, the constant
+      // we'd use is the column mean — which standardizes to exactly 0, so
+      // their contribution drops out. We still need ≥ 1 active var to be a
+      // predictor.
+      const colIdx = new Array<number | null>(activeVars.length);
+      const stdMean = new Array<number>(activeVars.length).fill(0);
+      const stdSd = new Array<number>(activeVars.length).fill(0);
+      let anyPredictor = false;
+      if (!df) return null;
+      const shadow = selection.shadow;
+      for (let a = 0; a < activeVars.length; a++) {
+        const varName = activeVars[a]!;
+        const col = df.column(varName);
+        if (!col || (col.type !== "numeric" && col.type !== "integer")) return null;
+        // Match toStandardisedMatrix: compute mean & sd over non-shadowed
+        // non-missing rows. Bail if the column has explicit scaling (we'd
+        // need to mirror scaleColumn, which isn't implemented here yet).
+        const sp = spec.find((v) => v.name === varName);
+        if (sp?.scaling) return null;
+        let count = 0, sum = 0;
+        const vals = col.values;
+        for (let i = 0; i < col.length; i++) {
+          if (bitGet(shadow, i)) continue;
+          if (col.missing.isMissing(i)) continue;
+          sum += vals[i]!;
+          count++;
+        }
+        const mean = count > 0 ? sum / count : 0;
+        let ss = 0;
+        for (let i = 0; i < col.length; i++) {
+          if (bitGet(shadow, i)) continue;
+          if (col.missing.isMissing(i)) continue;
+          const d = vals[i]! - mean;
+          ss += d * d;
+        }
+        const sd = count > 1 ? Math.sqrt(ss / (count - 1)) : 0;
+        stdMean[a] = mean;
+        stdSd[a] = sd;
+        const idx = bVars.indexOf(varName);
+        if (idx >= 0) {
+          colIdx[a] = idx;
+          anyPredictor = true;
+        } else {
+          colIdx[a] = null;
+        }
+      }
+      if (!anyPredictor) return null;
+
+      const xArr = new Float64Array(nPts);
+      const yArr = new Float64Array(nPts);
+      const basis = tour.basis;
+      for (let i = 0; i < nPts; i++) {
+        let sx = 0, sy = 0;
+        for (let a = 0; a < activeVars.length; a++) {
+          const cIdx = colIdx[a];
+          if (cIdx == null) continue; // non-predictor → standardized 0 → no contribution
+          const sd = stdSd[a]!;
+          if (sd === 0) continue;
+          const v = (grid[i * nVars + cIdx]! - stdMean[a]!) / sd;
+          sx += v * basis[a * k]!;
+          sy += v * basis[a * k + 1]!;
+        }
+        xArr[i] = sx;
+        yArr[i] = sy;
+      }
+      return {
+        x: xArr,
+        y: yArr,
+        paint: paintArr,
+        probabilities: probs,
+        indecisionThreshold: classification.indecisionThreshold,
+        paintPalette,
+      };
+    }
+
+    // Axis-aligned (non-tour). Both axes must be predictors and unscaled.
+    const xIdx = bVars.indexOf(panel.x);
+    const yIdx = bVars.indexOf(panel.y);
+    if (xIdx < 0 || yIdx < 0) return null;
+    if (xSpec?.scaling || ySpec?.scaling) return null;
+    const xArr = new Float64Array(nPts);
+    const yArr = new Float64Array(nPts);
+    for (let i = 0; i < nPts; i++) {
+      xArr[i] = grid[i * nVars + xIdx]!;
+      yArr[i] = grid[i * nVars + yIdx]!;
+    }
+    return {
+      x: xArr,
+      y: yArr,
+      paint: paintArr,
+      probabilities: probs,
+      indecisionThreshold: classification.indecisionThreshold,
+      paintPalette,
+    };
+  }, [
+    classification.boundariesVisible,
+    classification.boundaryGrid,
+    classification.boundaryPaint,
+    classification.boundaryProbabilities,
+    classification.boundaryVars,
+    classification.indecisionThreshold,
+    isTourActive,
+    tour.basis,
+    tour.activeVars,
+    tour.shape,
+    panel.x,
+    panel.y,
+    xSpec?.scaling,
+    ySpec?.scaling,
+    paintPalette,
+    df,
+    selection.shadow,
+    spec,
+  ]);
+
+  const misclassifiedMask = classification.boundariesVisible
+    ? classification.misclassified
+    : null;
 
   const edgeOverlay = useMemo(() => {
     if (!edges.visible || !edges.layer) return null;
@@ -405,13 +550,14 @@ export function Scatter({ panel }: ScatterProps) {
     shadow: selection.shadow,
     paintPalette,
     showMarginals,
+    misclassifiedMask,
   };
   const isThisPanelBrushing =
     brush.activePanelId === panel.id
     ? { tool: brush.tool, rect: brush.activeRect, path: brush.activePath }
     : null;
   const hullOverlay = buildHullOverlay(r.transform());
-    r.draw(visual, isThisPanelBrushing, edgeOverlay, hullOverlay, densityOverlay, biplotOverlay, rugOverlay, loessOverlay);
+    r.draw(visual, isThisPanelBrushing, edgeOverlay, hullOverlay, densityOverlay, biplotOverlay, rugOverlay, loessOverlay, boundaryOverlay);
     updatePinnedLabels(r);
 
     // Build kd-tree from current pixel positions if missing.
@@ -472,7 +618,7 @@ export function Scatter({ panel }: ScatterProps) {
   hullCacheRef.current = null;
   requestPaint();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, pointSize, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding, classification.boundaryPaint, classification.gridSize, classification.boundaryProbabilities, classification.boundariesVisible, showDensity, showRug, showLoess]);
+  }, [df, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, alpha, pointSize, tools.pinnedRows, tools.labelVar, edges.layer, edges.visible, edges.alpha, edges.colorMode, edges.colorAttr, edges.selection.mask, edges.selection.paint, hulls.colorGroups, hulls.paintGroups, hulls.alpha, colorState.encoding, classification.boundaryGrid, classification.boundaryPaint, classification.boundaryProbabilities, classification.boundaryVars, classification.boundariesVisible, classification.indecisionThreshold, classification.misclassified, tour.basis, tour.activeVars, showDensity, showRug, showLoess]);
 
   // Mouse interactions.
   const dragRef = useRef<{
@@ -721,9 +867,9 @@ export function Scatter({ panel }: ScatterProps) {
   <div className="plot-card" data-tool={activeTool} ref={cardRef}>
   <div className="plot-head">
   <span className="vars">
-  {isTourActive
-  ? `tour: ${tour.activeVars.join(", ")}`
-  : `${panel.x} × ${panel.y}`}
+          {isTourActive
+            ? `tour${tour.shape === "corr" ? " (corr)" : ""}: ${tour.activeVars.join(", ")}`
+            : `${panel.x} × ${panel.y}`}
   </span>
   <label className="plot-slider">
   <span>Alpha</span>

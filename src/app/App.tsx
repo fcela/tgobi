@@ -1,13 +1,8 @@
-import { useState, useEffect } from "react";
+import { useRef, useState, useEffect, lazy, Suspense } from "react";
 import { Layout } from "@/app/Layout";
 import { PlotGrid } from "@/app/PlotGrid";
 import { VariablePanel } from "@/app/VariablePanel";
 import { TourPanel } from "@/app/TourPanel";
-import { ClusteringPanel } from "@/app/ClusteringPanel";
-import { ClassificationPanel } from "@/app/ClassificationPanel";
-import { ProjectionPanel } from "@/app/ProjectionPanel";
-import { ScagnosticsPanel } from "@/app/ScagnosticsPanel";
-import { MapperPanel } from "@/app/MapperPanel";
 import { VariableCircle } from "@/app/VariableCircle";
 import { SavedViews } from "@/app/SavedViews";
 import { EmptyState } from "@/app/EmptyState";
@@ -22,6 +17,12 @@ import { HelpPopover } from "@/app/HelpPopover";
 import { LessonOverlay } from "@/app/LessonOverlay";
 import { LessonPicker } from "@/app/LessonPicker";
 import { LESSONS } from "@/lib/lessons/definitions";
+
+const ClusteringPanel = lazy(() => import("@/app/ClusteringPanel").then((m) => ({ default: m.ClusteringPanel })));
+const ClassificationPanel = lazy(() => import("@/app/ClassificationPanel").then((m) => ({ default: m.ClassificationPanel })));
+const ProjectionPanel = lazy(() => import("@/app/ProjectionPanel").then((m) => ({ default: m.ProjectionPanel })));
+const ScagnosticsPanel = lazy(() => import("@/app/ScagnosticsPanel").then((m) => ({ default: m.ScagnosticsPanel })));
+const MapperPanel = lazy(() => import("@/app/MapperPanel").then((m) => ({ default: m.MapperPanel })));
 import type { LoadedData } from "@/app/loadFile";
 import type { ColumnType, DataFrame } from "@/lib/data/types";
 import { coerceDataFrame } from "@/lib/data/coerce";
@@ -46,11 +47,20 @@ export function App() {
   const tools = useAppStore((s) => s.tools);
   const startLesson = useAppStore((s) => s.startLesson);
   const [lessonMenuOpen, setLessonMenuOpen] = useState(false);
+  const lessonMenuRef = useRef<HTMLSpanElement | null>(null);
+  // Close the lesson menu when the user clicks outside of it. Use
+  // `pointerdown` so the close happens before React's click handlers, and
+  // explicitly skip clicks inside the menu container so menu-item clicks
+  // don't race the close.
   useEffect(() => {
     if (!lessonMenuOpen) return;
-    const handler = () => setLessonMenuOpen(false);
-    document.addEventListener("click", handler, { once: true });
-    return () => document.removeEventListener("click", handler);
+    const handler = (e: PointerEvent) => {
+      if (lessonMenuRef.current && !lessonMenuRef.current.contains(e.target as Node)) {
+        setLessonMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
   }, [lessonMenuOpen]);
   const [rightTab, setRightTab] = useState<"tour" | "projection" | "clustering" | "classification" | "scagnostics" | "mapper">("tour");
   const [pending, setPending] = useState<LoadedData | null>(null);
@@ -106,7 +116,7 @@ export function App() {
           title="Open session from JSON file"
           onClick={() => openSession()}
         >Open</button>
-        <span style={{ position: "relative" }}>
+        <span style={{ position: "relative" }} ref={lessonMenuRef}>
           <button
             className="toolbar-button"
             onClick={() => setLessonMenuOpen((v) => !v)}
@@ -175,7 +185,9 @@ export function App() {
               <button className={rightTab === "scagnostics" ? "right-tab active" : "right-tab"} onClick={() => setRightTab("scagnostics")}>Scag</button>
               <button className={rightTab === "mapper" ? "right-tab active" : "right-tab"} onClick={() => setRightTab("mapper")}>Mapper</button>
       </div>
-      {rightTab === "tour" ? <TourPanel /> : rightTab === "projection" ? <ProjectionPanel /> : rightTab === "clustering" ? <ClusteringPanel /> : rightTab === "classification" ? <ClassificationPanel /> : rightTab === "scagnostics" ? <ScagnosticsPanel /> : rightTab === "mapper" ? <MapperPanel /> : <ScagnosticsPanel />}
+        <Suspense fallback={null}>
+        {rightTab === "tour" ? <TourPanel /> : rightTab === "projection" ? <ProjectionPanel /> : rightTab === "clustering" ? <ClusteringPanel /> : rightTab === "classification" ? <ClassificationPanel /> : rightTab === "scagnostics" ? <ScagnosticsPanel /> : rightTab === "mapper" ? <MapperPanel /> : <ScagnosticsPanel />}
+        </Suspense>
           {rightTab === "tour" && <VariableCircle />}
           <SavedViews />
           <CaseList />

@@ -13,6 +13,10 @@ export function ScagnosticsPanel() {
   const setSortDescending = useAppStore((s) => s.setScagnosticsSortDescending);
   const setFilterMeasure = useAppStore((s) => s.setScagnosticsFilterMeasure);
   const setFilterThreshold = useAppStore((s) => s.setScagnosticsFilterThreshold);
+  const setScatmatReorderBy = useAppStore((s) => s.setScagnosticsScatmatReorderBy);
+  const setScatmatReorderDescending = useAppStore((s) => s.setScagnosticsScatmatReorderDescending);
+  const addScatter = useAppStore((s) => s.addScatter);
+  const startTour = useAppStore((s) => s.startTour);
   const clear = useAppStore((s) => s.clearScagnostics);
 
   const numericVars = useMemo(
@@ -170,13 +174,62 @@ export function ScagnosticsPanel() {
         </div>
       )}
 
-      {scag.results && sortedResults.length === 0 && scag.filterThreshold > 0 && (
-        <div className="row">
-          <small style={{ color: "var(--text-dim)" }}>
-            No pairs with {scag.filterMeasure} ≥ {scag.filterThreshold.toFixed(2)}
-          </small>
-        </div>
-      )}
+  {scag.results && sortedResults.length === 0 && scag.filterThreshold > 0 && (
+  <div className="row">
+    <small style={{ color: "var(--text-dim)" }}>
+      No pairs with {scag.filterMeasure} ≥ {scag.filterThreshold.toFixed(2)}
+    </small>
+  </div>
+  )}
+
+  {sortedResults.length > 0 && (
+  <div className="row">
+    <button
+      onClick={() => {
+        const top = sortedResults[0]!;
+        addScatter(top.xVar, top.yVar);
+      }}
+      aria-label="open top pair as scatter"
+    >
+      Open top pair
+    </button>
+    <HelpPopover content={<><p className="help-title">Open Top Pair as Scatter</p><p>Opens the highest-ranked variable pair (according to the current sort) as a new scatterplot panel. This lets you quickly inspect the most interesting pair identified by scagnostics.</p><p><b>Tip:</b> Sort by the measure you care about first, then click this button to visualize the top pair.</p></>} />
+    <button
+      onClick={() => {
+        const top = sortedResults[0]!;
+        const panelId = addScatter(top.xVar, top.yVar);
+        startTour(panelId, "2d", [top.xVar, top.yVar]);
+      }}
+      aria-label="seed tour with top pair"
+    >
+      Seed tour
+    </button>
+    <HelpPopover content={<><p className="help-title">Seed Tour with Top Pair</p><p>Opens the highest-ranked variable pair as a scatterplot <em>and</em> starts a 2D tour on it. The tour will animate projections across all variables in the pair, so you can explore the structure that scagnostics flagged.</p><p><b>What is a tour?</b> A grand tour continuously rotates through random 2D projections of the data, revealing structure that any single static view might miss.</p><p><b>Misconception warning:</b> A tour does not "confirm" a scagnostic score. It helps you <em>see</em> what the score is picking up — which might be real clusters, or might be an artifact of outliers or sample size.</p></>} />
+  </div>
+  )}
+
+  <div className="row">
+    <span>Reorder scatmat</span>
+    <HelpPopover content={<><p className="help-title">Reorder Scatterplot Matrix by Scagnostic Measure</p><p>Reorder the rows and columns of any open scatterplot matrix so that variable pairs with high scores on the chosen measure cluster toward the top-left corner.</p><p><b>How it works:</b> For each variable, we find its maximum score with any other variable on the selected measure. Variables are then sorted by their max score (descending by default). This pushes high-scoring variables to the top-left of the matrix, making interesting pairs easier to spot visually.</p><p><b>Tip:</b> Set to "clumpy" to push clustered pairs to the top-left. Set to "original order" to restore the variable order you selected.</p><p><b>Warning:</b> This only reorders the visual layout — it does not change which variables are included or alter any data.</p></>} />
+    <select
+      aria-label="scatmat reorder measure"
+      value={scag.scatmatReorderBy ?? ""}
+      onChange={(e) => setScatmatReorderBy(e.target.value === "" ? null : e.target.value as ScagnosticMeasure)}
+    >
+      <option value="">original order</option>
+      {SCAGNOSTIC_MEASURES.map((m) => (
+        <option key={m} value={m}>{m}</option>
+      ))}
+    </select>
+    <button
+      className="sort-dir"
+      aria-label={scag.scatmatReorderDescending ? "reorder descending" : "reorder ascending"}
+      onClick={() => setScatmatReorderDescending(!scag.scatmatReorderDescending)}
+      title={scag.scatmatReorderDescending ? "High → Low" : "Low → High"}
+    >
+      {scag.scatmatReorderDescending ? "↓" : "↑"}
+    </button>
+  </div>
 
       <div className="row">
         <button disabled={!canRun} onClick={run} aria-label="run scagnostics">

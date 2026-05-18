@@ -1,3 +1,6 @@
+import { agglomerative } from "@/lib/clustering/hierarchical";
+import { dbscan } from "@/lib/clustering/dbscan";
+
 export interface MapperNode {
   id: number;
   rows: number[];
@@ -25,12 +28,20 @@ export interface MapperGraph {
 
 export type FilterFunction = "variable" | "pca1" | "pca2" | "density" | "eccentricity" | "residual";
 
+export type MapperClusterMethod = "kmeans" | "hierarchical" | "dbscan";
+
+export type MapperClusterLinkage = "single" | "complete" | "average";
+
 export interface MapperParams {
   filter: FilterFunction;
   filterVar: string | null;
   intervals: number;
   overlap: number;
   clusterK: number;
+  clusterMethod: MapperClusterMethod;
+  clusterLinkage: MapperClusterLinkage;
+  clusterEps: number;
+  clusterMinPts: number;
   variables: string[];
 }
 
@@ -40,6 +51,10 @@ const DEFAULT_MAPPER_PARAMS: MapperParams = {
   intervals: 10,
   overlap: 0.5,
   clusterK: 3,
+  clusterMethod: "kmeans",
+  clusterLinkage: "single",
+  clusterEps: 0.5,
+  clusterMinPts: 3,
   variables: [],
 };
 
@@ -67,7 +82,7 @@ export function computeMapper(
   const fMax = Math.max(...validValues);
   if (fMin === fMax) return { nodes: [], edges: [], intervals: params.intervals, overlap: params.overlap, nClusters: [] };
 
-  const { intervals, overlap, clusterK } = params;
+  const { intervals, overlap, clusterK, clusterMethod, clusterLinkage, clusterEps, clusterMinPts } = params;
   const step = (fMax - fMin) / intervals;
   const overlapSize = step * overlap;
   const nClusters: number[] = [];
@@ -88,7 +103,14 @@ export function computeMapper(
       continue;
     }
 
-    const clusters = simpleKMeans(intervalRows, dataCols, clusterK);
+    let clusters: number[][];
+    if (clusterMethod === "hierarchical") {
+      clusters = clusterHierarchical(intervalRows, dataCols, clusterK, clusterLinkage);
+    } else if (clusterMethod === "dbscan") {
+      clusters = clusterDbscan(intervalRows, dataCols, clusterEps, clusterMinPts);
+    } else {
+      clusters = simpleKMeans(intervalRows, dataCols, clusterK);
+    }
     nClusters.push(clusters.length);
 
     for (let ci = 0; ci < clusters.length; ci++) {
@@ -189,17 +211,7 @@ function simpleKMeans(
 
   const n = rows.length;
   const p = cols.length;
-  const data: number[][] = [];
-  for (let i = 0; i < n; i++) {
-    const point: number[] = [];
-    let hasMissing = false;
-    for (let j = 0; j < p; j++) {
-      if (bitGet(cols[j]!.missing, rows[i]!)) { hasMissing = true; break; }
-      point.push(cols[j]!.values[rows[i]!]!);
-    }
-    if (hasMissing) { data.push(Array(p).fill(0)); continue; }
-    data.push(point);
-  }
+  const data = buildIntervalData(rows, cols);
 
   const centers: number[][] = [];
   const usedRows = new Set<number>();
@@ -258,6 +270,65 @@ function simpleKMeans(
   }
 
   return clusters.filter((c) => c.length > 0);
+}
+
+function buildIntervalData(
+  rows: number[],
+  cols: Array<{ values: Float64Array | Int32Array; missing: Uint8Array; name: string }>,
+): number[][] {
+  const n = rows.length;
+  const p = cols.length;
+  const data: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const point: number[] = [];
+    let hasMissing = false;
+    for (let j = 0; j < p; j++) {
+      if (bitGet(cols[j]!.missing, rows[i]!)) { hasMissing = true; break; }
+      point.push(cols[j]!.values[rows[i]!]!);
+    }
+    if (hasMissing) { data.push(Array(p).fill(0)); continue; }
+    data.push(point);
+  }
+  return data;
+}
+
+function clusterHierarchical(
+  rows: number[],
+  cols: Array<{ values: Float64Array | Int32Array; missing: Uint8Array; name: string }>,
+  k: number,
+  linkage: MapperClusterLinkage,
+): number[][] {
+  if (rows.length <= k) return rows.map((r) => [r]);
+  const data = buildIntervalData(rows, cols);
+  const result = agglomerative(data, k, linkage);
+  const clusters: number[][] = [];
+  for (let g = 0; g < result.k; g++) {
+    const clusterRows: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (result.assignments[i] === g) clusterRows.push(rows[i]!);
+    }
+    if (clusterRows.length > 0) clusters.push(clusterRows);
+  }
+  return clusters;
+}
+
+function clusterDbscan(
+  rows: number[],
+  cols: Array<{ values: Float64Array | Int32Array; missing: Uint8Array; name: string }>,
+  eps: number,
+  minPts: number,
+): number[][] {
+  const data = buildIntervalData(rows, cols);
+  const result = dbscan(data, eps, minPts);
+  const clusters: number[][] = [];
+  for (let g = 0; g < result.k; g++) {
+    const clusterRows: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (result.assignments[i] === g) clusterRows.push(rows[i]!);
+    }
+    if (clusterRows.length > 0) clusters.push(clusterRows);
+  }
+  return clusters;
 }
 
 function dist2(a: number[], b: number[]): number {

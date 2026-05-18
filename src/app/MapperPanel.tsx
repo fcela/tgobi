@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useAppStore } from "@/store";
-import type { FilterFunction } from "@/lib/mapper";
+import type { FilterFunction, MapperClusterMethod, MapperClusterLinkage } from "@/lib/mapper";
 import { HelpPopover } from "@/app/HelpPopover";
 import { MapperSweepDiagnostics } from "@/app/MapperSweepDiagnostics";
 
@@ -12,6 +12,10 @@ export function MapperPanel() {
   const setMapperIntervals = useAppStore((s) => s.setMapperIntervals);
   const setMapperOverlap = useAppStore((s) => s.setMapperOverlap);
   const setMapperClusterK = useAppStore((s) => s.setMapperClusterK);
+  const setMapperClusterMethod = useAppStore((s) => s.setMapperClusterMethod);
+  const setMapperClusterLinkage = useAppStore((s) => s.setMapperClusterLinkage);
+  const setMapperClusterEps = useAppStore((s) => s.setMapperClusterEps);
+  const setMapperClusterMinPts = useAppStore((s) => s.setMapperClusterMinPts);
   const setMapperVariables = useAppStore((s) => s.setMapperVariables);
   const runMapper = useAppStore((s) => s.runMapper);
   const clearMapper = useAppStore((s) => s.clearMapper);
@@ -119,17 +123,88 @@ export function MapperPanel() {
         />
       </div>
 
-      <div className="row">
-        <span>Clusters</span>
-        <HelpPopover content={<><p className="help-title">Clusters per Interval</p><p>How many clusters to find within each filter bin (via single-linkage hierarchical clustering). Each cluster becomes a node in the graph.</p><p><b>2-3</b>: Each interval produces 2-3 groups. Good when structure is simple.</p><p><b>5+</b>: Captures finer sub-structure within each interval. More nodes, more detailed graph.</p><p><b>Tip:</b> Start with 3. If the graph looks too simple (one long chain), increase to capture branching.</p></>} />
-        <input
-          type="number"
-          min={2}
-          max={10}
-          value={params.clusterK}
-          onChange={(e) => setMapperClusterK(Math.max(2, parseInt(e.target.value) || 3))}
-        />
-      </div>
+  <div className="row">
+  <span>Clusters</span>
+  <HelpPopover content={<><p className="help-title">Clustering Method</p><p>How to cluster points within each filter interval. Each cluster becomes a node in the Mapper graph.</p><div className="help-measures"><span className="mname">k-means</span><span className="mdesc">Partitions points into k groups by minimizing within-cluster variance. Fast and simple. Good default. Set <b>cluster k</b> to control the number of clusters per interval.</span><span className="mname">hierarchical</span><span className="mdesc">Agglomerative (bottom-up) clustering. Merges closest clusters until k remain. Choose <b>linkage</b> to control how "closest" is defined. Good for capturing nested structure.</span><span className="mname">dbscan</span><span className="mdesc">Density-based clustering. Finds clusters of arbitrary shape and marks sparse points as noise (excluded from graph). Set <b>eps</b> (neighborhood radius) and <b>minPts</b> (minimum points for a core point). No need to specify number of clusters.</span></div><p><b>Tip:</b> Start with k-means (k=3). Try hierarchical with single linkage if data has chain-like structure. Use DBSCAN when clusters have irregular shapes or you want noise points excluded.</p></>} />
+  <select
+    aria-label="Mapper clustering method"
+    value={params.clusterMethod}
+    onChange={(e) => setMapperClusterMethod(e.target.value as MapperClusterMethod)}
+  >
+    <option value="kmeans">k-means</option>
+    <option value="hierarchical">hierarchical</option>
+    <option value="dbscan">DBSCAN</option>
+  </select>
+</div>
+
+{params.clusterMethod === "kmeans" && (
+  <div className="row">
+    <span>Cluster k</span>
+    <input
+      type="number"
+      min={2}
+      max={10}
+      value={params.clusterK}
+      onChange={(e) => setMapperClusterK(Math.max(2, parseInt(e.target.value) || 3))}
+    />
+  </div>
+)}
+
+{params.clusterMethod === "hierarchical" && (
+  <>
+    <div className="row">
+      <span>Linkage</span>
+      <HelpPopover content={<><p className="help-title">Hierarchical Linkage</p><p>How the distance between clusters is measured during merging.</p><div className="help-measures"><span className="mname">single</span><span className="mdesc">Minimum distance between any pair of points across clusters. Tends to produce elongated, chain-like clusters. Good for detecting connected structures.</span><span className="mname">complete</span><span className="mdesc">Maximum distance between any pair of points. Produces compact, spherical clusters. More robust to noise than single linkage.</span><span className="mname">average</span><span className="mdesc">Average distance between all pairs of points. A compromise between single and complete linkage.</span></div></>} />
+      <select
+        aria-label="Hierarchical linkage"
+        value={params.clusterLinkage}
+        onChange={(e) => setMapperClusterLinkage(e.target.value as MapperClusterLinkage)}
+      >
+        <option value="single">single</option>
+        <option value="complete">complete</option>
+        <option value="average">average</option>
+      </select>
+    </div>
+    <div className="row">
+      <span>Cut k</span>
+      <input
+        type="number"
+        min={2}
+        max={10}
+        value={params.clusterK}
+        onChange={(e) => setMapperClusterK(Math.max(2, parseInt(e.target.value) || 3))}
+      />
+    </div>
+  </>
+)}
+
+{params.clusterMethod === "dbscan" && (
+  <>
+    <div className="row">
+      <span>Eps</span>
+      <HelpPopover content={<><p className="help-title">DBSCAN Epsilon</p><p>The neighborhood radius. Two points are neighbors if their distance is less than eps. Controls how "close" points must be to belong to the same cluster.</p><p><b>Tip:</b> If all points end up in one cluster, decrease eps. If there are too many noise points, increase eps. Try values between 0.1 and 2.0.</p></>} />
+      <input
+        type="number"
+        min={0.01}
+        max={10}
+        step={0.05}
+        value={params.clusterEps}
+        onChange={(e) => setMapperClusterEps(Math.max(0.01, parseFloat(e.target.value) || 0.5))}
+      />
+    </div>
+    <div className="row">
+      <span>Min pts</span>
+      <HelpPopover content={<><p className="help-title">DBSCAN Min Points</p><p>Minimum number of points in an eps-neighborhood for a point to be a "core point". Core points form the backbone of clusters.</p><p><b>Tip:</b> Usually set to dimensionality + 1 or higher. Start with 3-5. Higher values produce fewer, larger clusters and more noise points.</p></>} />
+      <input
+        type="number"
+        min={2}
+        max={20}
+        value={params.clusterMinPts}
+        onChange={(e) => setMapperClusterMinPts(Math.max(2, parseInt(e.target.value) || 3))}
+      />
+    </div>
+  </>
+)}
 
       {graph && (
         <div className="row">

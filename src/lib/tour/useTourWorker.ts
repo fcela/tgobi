@@ -22,10 +22,15 @@ export function useTourWorker(): void {
     return `${v}:${s?.scaling ?? ""}`;
   }).join(",");
 
+  const corrMode = tour.shape === "corr";
+
   // Spin up / tear down the worker as `activePanelId` toggles.
   useEffect(() => {
     if (tour.activePanelId == null || !df || tour.activeVars.length < 2) {
-      // ensure no worker around
+      if (workerRef.current) { workerRef.current.terminate(); workerRef.current = null; }
+      return;
+    }
+    if (corrMode && (tour.activeXVars.length < 1 || tour.activeYVars.length < 1)) {
       if (workerRef.current) { workerRef.current.terminate(); workerRef.current = null; }
       return;
     }
@@ -38,24 +43,50 @@ export function useTourWorker(): void {
       setTourFrame(basis, proj, t, ppValue);
     };
 
-    const X = toStandardisedMatrix(df, tour.activeVars, shadow, spec);
-    const classLabels = buildClassLabels(tour.ppClassSource, paint, shadow, df);
-    const k = tour.shape === "1d" ? 1 : 2;
-    worker.postMessage(
-      {
-        kind: "init",
-        X: X.values,
-        n: X.nrow,
-        p: X.ncol,
-        k,
-        speed: tour.speed,
-        seed: Math.floor(Math.random() * 1e9),
-        mode: tour.mode,
-        ppIndex: tour.ppIndex,
-        classLabels,
-        frozenRows: buildFrozenRows(tour.activeVars, tour.frozenVars),
-      },
-    );
+    if (corrMode) {
+      const xVars = tour.activeXVars.length > 0 ? tour.activeXVars : tour.activeVars.slice(0, Math.ceil(tour.activeVars.length / 2));
+      const yVars = tour.activeYVars.length > 0 ? tour.activeYVars : tour.activeVars.slice(Math.ceil(tour.activeVars.length / 2));
+      const combinedVars = [...xVars, ...yVars];
+      const X = toStandardisedMatrix(df, combinedVars, shadow, spec);
+      const classLabels = buildClassLabels(tour.ppClassSource, paint, shadow, df);
+      worker.postMessage(
+        {
+          kind: "init",
+          X: X.values,
+          n: X.nrow,
+          p: X.ncol,
+          k: 2,
+          speed: tour.speed,
+          seed: Math.floor(Math.random() * 1e9),
+          mode: tour.mode,
+          ppIndex: tour.ppIndex,
+          classLabels,
+          frozenRows: buildFrozenRows(combinedVars, tour.frozenVars),
+          corrMode: true,
+          pX: xVars.length,
+          pY: yVars.length,
+        },
+      );
+    } else {
+      const X = toStandardisedMatrix(df, tour.activeVars, shadow, spec);
+      const classLabels = buildClassLabels(tour.ppClassSource, paint, shadow, df);
+      const k = tour.shape === "1d" ? 1 : 2;
+      worker.postMessage(
+        {
+          kind: "init",
+          X: X.values,
+          n: X.nrow,
+          p: X.ncol,
+          k,
+          speed: tour.speed,
+          seed: Math.floor(Math.random() * 1e9),
+          mode: tour.mode,
+          ppIndex: tour.ppIndex,
+          classLabels,
+          frozenRows: buildFrozenRows(tour.activeVars, tour.frozenVars),
+        },
+      );
+    }
 
     // Send keyframes if in guided mode
     if (tour.mode === "guided" && tour.keyframes.length >= 2) {
@@ -67,9 +98,8 @@ export function useTourWorker(): void {
       worker.terminate();
       workerRef.current = null;
     };
-    // Re-init on var/shape/df change. Speed and mode changes are handled below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, tour.activePanelId, tour.shape, tour.activeVars.join(","), scalingKey, shadow]);
+  }, [df, tour.activePanelId, tour.shape, tour.activeVars.join(","), tour.activeXVars.join(","), tour.activeYVars.join(","), scalingKey, shadow]);
 
   // Play/pause
   useEffect(() => {
@@ -89,20 +119,26 @@ export function useTourWorker(): void {
   useEffect(() => {
     const w = workerRef.current;
     if (!w) return;
+    const combinedVars = corrMode
+      ? [...tour.activeXVars, ...tour.activeYVars]
+      : tour.activeVars;
     w.postMessage({
       kind: "setFrozenRows",
-      frozenRows: buildFrozenRows(tour.activeVars, tour.frozenVars),
+      frozenRows: buildFrozenRows(combinedVars, tour.frozenVars),
     });
-  }, [tour.activeVars, tour.frozenVars]);
+  }, [tour.activeVars, tour.activeXVars, tour.activeYVars, tour.frozenVars, corrMode]);
 
   // Manual tour: update a frozen variable's contribution
   useEffect(() => {
     const w = workerRef.current;
     if (!w || tour.manualVar == null) return;
-    const varIndex = tour.activeVars.indexOf(tour.manualVar);
+    const combinedVars = corrMode
+      ? [...tour.activeXVars, ...tour.activeYVars]
+      : tour.activeVars;
+    const varIndex = combinedVars.indexOf(tour.manualVar);
     if (varIndex < 0) return;
     w.postMessage({ kind: "setManualValue", varIndex, value: tour.manualValue });
-  }, [tour.manualVar, tour.manualValue, tour.activeVars]);
+  }, [tour.manualVar, tour.manualValue, tour.activeVars, tour.activeXVars, tour.activeYVars, corrMode]);
 
   // Switch between a free grand tour and PP-guided targets without restarting.
   useEffect(() => {

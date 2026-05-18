@@ -13,18 +13,21 @@ import type { KeyframeSpline } from "@/lib/linalg/catmullRom";
 
 type InMessage =
   | {
-    kind: "init";
-    X: Float64Array;
-    n: number;
-    p: number;
-    k: 1 | 2;
-    speed: number;
-    seed: number;
-    mode: "grand" | "pp" | "manual" | "guided" | "langevin";
-    ppIndex: ProjectionPursuitIndex;
-    classLabels: Int32Array | null;
-    frozenRows: Uint8Array;
-  }
+      kind: "init";
+      X: Float64Array;
+      n: number;
+      p: number;
+      k: 1 | 2;
+      speed: number;
+      seed: number;
+      mode: "grand" | "pp" | "manual" | "guided" | "langevin";
+      ppIndex: ProjectionPursuitIndex;
+      classLabels: Int32Array | null;
+      frozenRows: Uint8Array;
+      corrMode?: boolean;
+      pX?: number;
+      pY?: number;
+    }
   | { kind: "play" }
   | { kind: "pause" }
   | { kind: "setMode"; mode: "grand" | "pp" | "manual" | "guided" | "langevin"; ppIndex: ProjectionPursuitIndex; classLabels: Int32Array | null }
@@ -64,6 +67,20 @@ let scrubberT = -1;
 let langevinStep = 0.05;
 let langevinDiffusion = 1.0;
 
+let corrMode = false;
+let pX = 0;
+let pY = 0;
+let Bx: Mat | null = null;
+let By: Mat | null = null;
+let targetX: Mat | null = null;
+let targetY: Mat | null = null;
+let pathX: ((t: number) => Mat) | null = null;
+let pathY: ((t: number) => Mat) | null = null;
+let frozenRowsX: Uint8Array = new Uint8Array(0);
+let frozenRowsY: Uint8Array = new Uint8Array(0);
+let frozenValuesX: Float64Array | null = null;
+let frozenValuesY: Float64Array | null = null;
+
 const GRAND_TARGET_FRACTION = 0.6;
 const TIMER_MS = 16;
 
@@ -84,6 +101,11 @@ function newTarget(start?: Mat): void {
 
 function tick(): void {
   if (!running || !X) return;
+
+  if (corrMode) {
+    tickCorr();
+    return;
+  }
 
   if (mode === "guided" && keyframeSpline && keyframeSpline.numKeyframes >= 2) {
     tickGuided();
@@ -130,6 +152,105 @@ function tickGuided(): void {
   (self as unknown as Worker).postMessage(msg, [proj.buffer]);
 }
 
+function newCorrTarget(startX?: Mat | null, startY?: Mat | null): void {
+  if (!X) return;
+  const startXActual = startX ?? Bx ?? randomBasis(pX, 1, rng);
+  const startYActual = startY ?? By ?? randomBasis(pY, 1, rng);
+  Bx = startXActual;
+  By = startYActual;
+
+  if (mode === "pp") {
+    targetX = projectionPursuitTarget(extractSubMatrix(X, 0, pX), Bx, ppIndex, rng, {}, classLabels).basis;
+    targetY = projectionPursuitTarget(extractSubMatrix(X, pX, pY), By, ppIndex, rng, {}, classLabels).basis;
+  } else {
+    const rtX = randomBasis(pX, 1, rng);
+    const rtY = randomBasis(pY, 1, rng);
+    targetX = tourPath(Bx, rtX)(GRAND_TARGET_FRACTION);
+    targetY = tourPath(By, rtY)(GRAND_TARGET_FRACTION);
+  }
+
+  targetX = applyCorrFrozenRows(targetX, frozenRowsX, frozenValuesX);
+  targetY = applyCorrFrozenRows(targetY, frozenRowsY, frozenValuesY);
+  pathX = tourPath(Bx, targetX);
+  pathY = tourPath(By, targetY);
+  t = 0;
+}
+
+function tickCorr(): void {
+  if (!running || !X || !pathX || !pathY || !Bx || !By) return;
+  t += 1 / Math.max(1, speed);
+  if (t >= 1) {
+    newCorrTarget(pathX(1), pathY(1));
+    return;
+  }
+  const easedT = easeProgress(t);
+  const Fx = applyCorrFrozenRows(pathX(easedT), frozenRowsX, frozenValuesX);
+  const Fy = applyCorrFrozenRows(pathY(easedT), frozenRowsY, frozenValuesY);
+  Bx = Fx;
+  By = Fy;
+
+  const projX = corrProject(X, 0, pX, Fx);
+  const projY = corrProject(X, pX, pY, Fy);
+
+  const nn = X.nrow;
+  const proj = new Float64Array(nn * 2);
+  for (let i = 0; i < nn; i++) {
+    proj[i * 2] = projX[i]!;
+    proj[i * 2 + 1] = projY[i]!;
+  }
+
+  const basis = new Float64Array((pX + pY) * 2);
+  for (let i = 0; i < pX; i++) {
+    basis[i * 2] = Fx.values[i]!;
+    basis[i * 2 + 1] = 0;
+  }
+  for (let j = 0; j < pY; j++) {
+    basis[(pX + j) * 2] = 0;
+    basis[(pX + j) * 2 + 1] = By.values[j]!;
+  }
+
+  const msg: OutMessage = { kind: "frame", basis, proj, t, ppValue: null };
+  (self as unknown as Worker).postMessage(msg, [proj.buffer]);
+}
+
+function extractSubMatrix(Xfull: Mat, colOffset: number, colCount: number): Mat {
+  const nn = Xfull.nrow;
+  const out = new Float64Array(nn * colCount);
+  for (let i = 0; i < nn; i++) {
+    for (let j = 0; j < colCount; j++) {
+      out[i * colCount + j] = Xfull.values[i * Xfull.ncol + (colOffset + j)]!;
+    }
+  }
+  return makeMat(nn, colCount, out);
+}
+
+function corrProject(Xfull: Mat, colOffset: number, colCount: number, basis1d: Mat): Float64Array {
+  const nn = Xfull.nrow;
+  const out = new Float64Array(nn);
+  for (let i = 0; i < nn; i++) {
+    let s = 0;
+    for (let j = 0; j < colCount; j++) {
+      s += Xfull.values[i * Xfull.ncol + (colOffset + j)]! * basis1d.values[j]!;
+    }
+    out[i] = s;
+  }
+  return out;
+}
+
+function applyCorrFrozenRows(candidate: Mat, frozen: Uint8Array, frozenVals: Float64Array | null): Mat {
+  if (!frozenVals) return candidate;
+  let hasAny = false;
+  for (let i = 0; i < frozen.length; i++) { if (frozen[i]) { hasAny = true; break; } }
+  if (!hasAny) return candidate;
+  const result = new Float64Array(candidate.values);
+  for (let row = 0; row < candidate.nrow; row++) {
+    if (frozen[row]) {
+      result[row] = frozenVals[row]!;
+    }
+  }
+  return makeMat(candidate.nrow, candidate.ncol, result);
+}
+
 function startTimer(): void {
   if (timer != null) return;
   timer = setInterval(tick, TIMER_MS);
@@ -150,23 +271,39 @@ function rebuildSpline(kfBases: Float64Array[]): void {
 self.onmessage = (e: MessageEvent<InMessage>) => {
   const msg = e.data;
   switch (msg.kind) {
-    case "init":
-      X = makeMat(msg.n, msg.p, new Float64Array(msg.X));
-      n = msg.n; p = msg.p; k = msg.k;
-      speed = msg.speed;
-      mode = msg.mode;
-      ppIndex = msg.ppIndex;
-      classLabels = msg.classLabels ? new Int32Array(msg.classLabels) : null;
-      rng = mulberry32(msg.seed);
+  case "init":
+    X = makeMat(msg.n, msg.p, new Float64Array(msg.X));
+    n = msg.n; p = msg.p; k = msg.k;
+    speed = msg.speed;
+    mode = msg.mode;
+    ppIndex = msg.ppIndex;
+    classLabels = msg.classLabels ? new Int32Array(msg.classLabels) : null;
+    rng = mulberry32(msg.seed);
+
+    corrMode = !!msg.corrMode;
+    if (corrMode) {
+      pX = msg.pX ?? 0;
+      pY = msg.pY ?? 0;
+      Bx = randomBasis(pX, 1, rng);
+      By = randomBasis(pY, 1, rng);
+      frozenRowsX = new Uint8Array(pX);
+      frozenRowsY = new Uint8Array(pY);
+      frozenValuesX = new Float64Array(pX);
+      frozenValuesY = new Float64Array(pY);
+      updateCorrFrozenRows(msg.frozenRows, false);
+      newCorrTarget();
+    } else {
       curr = randomBasis(p, k, rng);
       currentFrame = curr;
       frozenRows = new Uint8Array(p);
       frozenValues = new Float64Array(p * k);
       updateFrozenRows(msg.frozenRows, false);
       newTarget();
-      running = true;
-      startTimer();
-      break;
+    }
+
+    running = true;
+    startTimer();
+    break;
     case "play":
       running = true;
       startTimer();
@@ -194,11 +331,35 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
     }
     break;
   }
-    case "setFrozenRows":
+  case "setFrozenRows":
+    if (corrMode) {
+      updateCorrFrozenRows(msg.frozenRows, true);
+    } else {
       updateFrozenRows(msg.frozenRows, true);
-      break;
-    case "setManualValue":
-      if (frozenValues && msg.varIndex >= 0 && msg.varIndex < p) {
+    }
+    break;
+  case "setManualValue":
+    if (corrMode) {
+      const corrRow = msg.varIndex;
+      if (corrRow < 0 || corrRow >= pX + pY) break;
+      const isXVar = corrRow < pX;
+      const localRow = isXVar ? corrRow : corrRow - pX;
+      const fRows = isXVar ? frozenRowsX : frozenRowsY;
+      const fVals = isXVar ? frozenValuesX : frozenValuesY;
+      const basis1d = isXVar ? Bx : By;
+      if (!fVals || !basis1d) break;
+      const mag = Math.max(-1, Math.min(1, msg.value));
+      fVals[localRow] = mag;
+      if (!fRows[localRow]) fRows[localRow] = 1;
+      if (basis1d) copyCorrFrozenFromBasis(basis1d, fVals, localRow);
+      if (isXVar) {
+        Bx = applyCorrFrozenRows(basis1d, frozenRowsX, frozenValuesX);
+        newCorrTarget(Bx, By ?? undefined);
+      } else {
+        By = applyCorrFrozenRows(basis1d, frozenRowsY, frozenValuesY);
+        newCorrTarget(Bx ?? undefined, By);
+      }
+    } else if (frozenValues && msg.varIndex >= 0 && msg.varIndex < p) {
         const row = msg.varIndex;
         const mag = Math.max(-1, Math.min(1, msg.value));
         if (k === 1) {
@@ -230,12 +391,24 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
         }
       }
       break;
-    case "setBasis":
+  case "setBasis":
+    if (corrMode) {
+      const bData = new Float64Array(msg.basis);
+      const bxVals = new Float64Array(pX);
+      const byVals = new Float64Array(pY);
+      for (let i = 0; i < pX; i++) bxVals[i] = bData[i * 2]!;
+      for (let j = 0; j < pY; j++) byVals[j] = bData[(pX + j) * 2 + 1]!;
+      Bx = makeMat(pX, 1, bxVals);
+      By = makeMat(pY, 1, byVals);
+      recaptureCorrFrozenValues();
+      newCorrTarget(Bx, By);
+    } else {
       curr = makeMat(p, k, new Float64Array(msg.basis));
       currentFrame = curr;
       recaptureFrozenValues();
       newTarget();
-      break;
+    }
+    break;
     case "setKeyframes":
       rebuildSpline(msg.keyframes);
       if (mode === "guided" && keyframeSpline) {
@@ -258,12 +431,16 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
     langevinDiffusion = msg.diffusion;
     break;
   case "stop":
-      running = false;
-      stopTimer();
-      X = null; classLabels = null; curr = null; currentFrame = null; target = null; path = null;
-      frozenRows = new Uint8Array(0); frozenValues = null; t = 0;
-      keyframeSpline = null; guidedU = 0; guidedDirection = 1; scrubberT = -1;
-      break;
+    running = false;
+    stopTimer();
+    X = null; classLabels = null; curr = null; currentFrame = null; target = null; path = null;
+    frozenRows = new Uint8Array(0); frozenValues = null; t = 0;
+    keyframeSpline = null; guidedU = 0; guidedDirection = 1; scrubberT = -1;
+    corrMode = false; pX = 0; pY = 0; Bx = null; By = null;
+    targetX = null; targetY = null; pathX = null; pathY = null;
+    frozenRowsX = new Uint8Array(0); frozenRowsY = new Uint8Array(0);
+    frozenValuesX = null; frozenValuesY = null;
+    break;
   }
 };
 
@@ -318,6 +495,55 @@ function hasFrozenRows(): boolean {
     if (frozenRows[i]) return true;
   }
   return false;
+}
+
+function updateCorrFrozenRows(nextRows: Uint8Array, retarget: boolean): void {
+  const nextX = new Uint8Array(pX);
+  const nextY = new Uint8Array(pY);
+  for (let i = 0; i < Math.min(pX, nextRows.length); i++) nextX[i] = nextRows[i] ? 1 : 0;
+  for (let i = 0; i < Math.min(pY, nextRows.length - pX); i++) nextY[i] = nextRows[pX + i] ? 1 : 0;
+
+  if (!frozenValuesX || frozenValuesX.length !== pX) frozenValuesX = new Float64Array(pX);
+  if (!frozenValuesY || frozenValuesY.length !== pY) frozenValuesY = new Float64Array(pY);
+
+  if (Bx) {
+    for (let row = 0; row < pX; row++) {
+      if (nextX[row] && !frozenRowsX[row]) frozenValuesX![row] = Bx.values[row]!;
+      if (!nextX[row]) frozenValuesX![row] = 0;
+    }
+  }
+  if (By) {
+    for (let row = 0; row < pY; row++) {
+      if (nextY[row] && !frozenRowsY[row]) frozenValuesY![row] = By.values[row]!;
+      if (!nextY[row]) frozenValuesY![row] = 0;
+    }
+  }
+
+  frozenRowsX = nextX;
+  frozenRowsY = nextY;
+
+  if (retarget && Bx && By) {
+    Bx = applyCorrFrozenRows(Bx, frozenRowsX, frozenValuesX);
+    By = applyCorrFrozenRows(By, frozenRowsY, frozenValuesY);
+    newCorrTarget(Bx, By);
+  }
+}
+
+function recaptureCorrFrozenValues(): void {
+  if (Bx && frozenValuesX) {
+    for (let row = 0; row < pX; row++) {
+      if (frozenRowsX[row]) frozenValuesX[row] = Bx.values[row]!;
+    }
+  }
+  if (By && frozenValuesY) {
+    for (let row = 0; row < pY; row++) {
+      if (frozenRowsY[row]) frozenValuesY[row] = By.values[row]!;
+    }
+  }
+}
+
+function copyCorrFrozenFromBasis(basis1d: Mat, frozenVals: Float64Array, row: number): void {
+  frozenVals[row] = basis1d.values[row]!;
 }
 
 function easeProgress(x: number): number {

@@ -1,5 +1,6 @@
 import type {
   BiplotOverlay,
+  BoundaryOverlay,
   BrushOverlay,
   DensityOverlay,
   EdgeOverlay,
@@ -157,6 +158,7 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     biplotOverlay: BiplotOverlay | null = null,
     rugOverlay: RugOverlay | null = null,
     loessOverlay: LoessOverlay | null = null,
+    boundaryOverlay: BoundaryOverlay | null = null,
   ): void {
     const ctx = this.#ctx;
     if (!ctx || !this.#x || !this.#y || !this.#xMissing || !this.#yMissing) return;
@@ -182,6 +184,13 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     drawRugOverlay(ctx, rugOverlay, t);
     drawLoessOverlay(ctx, loessOverlay, t);
 
+    // Misclassified rows render as an X cross (shape 5) regardless of their
+    // brushed shape. The classification slice owns this mask; selection.shape
+    // is left alone.
+    const misMask = visual.misclassifiedMask;
+    const shapeAt = (i: number): number =>
+      misMask && misMask[i] ? 5 : (visual.shape[i] ?? 0);
+
     // pass 1: shadowed (behind everything except edges, faint)
   for (let i = 0; i < n; i++) {
     if (bitGet(xm, i) || bitGet(ym, i)) continue;
@@ -193,7 +202,8 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
       ? (visual.paintPalette[paintIdx - 1] ?? visual.color[i] ?? "#cccccc")
       : (visual.color[i] ?? "#cccccc");
     ctx.fillStyle = fill;
-    drawMarker(ctx, p.x, p.y, pointR, visual.shape[i] ?? 0);
+    ctx.strokeStyle = fill;
+    drawMarker(ctx, p.x, p.y, pointR, shapeAt(i));
   }
     ctx.globalAlpha = 1;
 
@@ -208,7 +218,8 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
   : (visual.color[i] ?? "#cccccc");
   ctx.globalAlpha = visual.alpha;
   ctx.fillStyle = fill;
-  drawMarker(ctx, p.x, p.y, pointR, visual.shape[i] ?? 0);
+  ctx.strokeStyle = fill;
+  drawMarker(ctx, p.x, p.y, pointR, shapeAt(i));
   }
   ctx.globalAlpha = 1;
 
@@ -221,7 +232,7 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     ctx.globalAlpha = HALO_ALPHA;
     ctx.strokeStyle = "#ffd400";
     ctx.lineWidth = 1.5;
-    drawMarker(ctx, p.x, p.y, haloR, visual.shape[i] ?? 0, true);
+    drawMarker(ctx, p.x, p.y, haloR, shapeAt(i), true);
   }
   ctx.globalAlpha = 1;
 
@@ -247,7 +258,35 @@ export class Canvas2DScatterRenderer implements ScatterRenderer {
     ctx.globalAlpha = 1;
   }
 
-    // pass 4: active brush overlay
+    // pass 4: decision-boundary overlay (outline rings, colored by predicted
+    // class). Drawn with a thicker stroke and a 1.5× radius so they read as
+    // a distinct overlay even on top of dense data points (e.g. in tour).
+    if (boundaryOverlay) {
+      const bx = boundaryOverlay.x;
+      const by = boundaryOverlay.y;
+      const bp = boundaryOverlay.paint;
+      const bprob = boundaryOverlay.probabilities;
+      const thresh = boundaryOverlay.indecisionThreshold;
+      const palette = boundaryOverlay.paintPalette;
+      const ringR = Math.max(3, pointR * 1.5);
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.95;
+      for (let i = 0; i < bx.length; i++) {
+        if (bp[i]! === 0) continue;
+        if (bprob[i]! < thresh) continue;
+        const xv = bx[i]!;
+        const yv = by[i]!;
+        if (!Number.isFinite(xv) || !Number.isFinite(yv)) continue;
+        const p = t.toPx(xv, yv);
+        ctx.strokeStyle = palette[bp[i]! - 1] ?? "#cccccc";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // pass 5: active brush overlay
     drawBrushOverlay(ctx, activeBrush);
   }
 }

@@ -107,11 +107,11 @@ export function logisticRegressionClassify(
   }
 
   const allPredictions = new Int16Array(predictX.length);
-  const allProbs = new Float32Array(predictX.length);
+  const allProbs = new Float32Array(predictX.length * nClasses);
   for (let i = 0; i < predictX.length; i++) {
     const { bestC, probs } = predictProbs(predictX[i]!);
     allPredictions[i] = bestC;
-    allProbs[i] = probs[bestC]!;
+    for (let c = 0; c < nClasses; c++) allProbs[i * nClasses + c] = probs[c]!;
   }
 
   const sizes = new Array<number>(nClasses).fill(0);

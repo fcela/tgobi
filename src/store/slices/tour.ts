@@ -13,6 +13,8 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
     isPlaying: false,
     speed: DEFAULT_SPEED,
     activeVars: [],
+    activeXVars: [],
+    activeYVars: [],
     frozenVars: [],
     manualVar: null,
     manualValue: 0,
@@ -32,11 +34,37 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
   },
 
   startTour: (panelId, shape, vars) =>
-    set((s) => ({
-      tour: { ...s.tour, activePanelId: panelId, shape, activeVars: vars,
-        frozenVars: [], manualVar: null, manualValue: 0, isPlaying: true, basis: null, proj: null, ppValue: null, t: 0,
-        keyframes: [], scrubberT: 0, scrubbing: false, ppScoreTrace: [] },
-    })),
+    set((s) => {
+      let activeXVars: string[] = [];
+      let activeYVars: string[] = [];
+      if (shape === "corr") {
+        const half = Math.ceil(vars.length / 2);
+        activeXVars = vars.slice(0, half);
+        activeYVars = vars.slice(half);
+      }
+      return {
+        tour: {
+          ...s.tour,
+          activePanelId: panelId,
+          shape,
+          activeVars: vars,
+          activeXVars,
+          activeYVars,
+          frozenVars: [],
+          manualVar: null,
+          manualValue: 0,
+          isPlaying: true,
+          basis: null,
+          proj: null,
+          ppValue: null,
+          t: 0,
+          keyframes: [],
+          scrubberT: 0,
+          scrubbing: false,
+          ppScoreTrace: [],
+        },
+      };
+    }),
 
   pauseTour: () => set((s) => ({ tour: { ...s.tour, isPlaying: false } })),
   resumeTour: () => set((s) => ({ tour: { ...s.tour, isPlaying: true } })),
@@ -44,21 +72,31 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
   stopTour: () =>
     set((s) => ({
       tour: { ...s.tour, activePanelId: null, isPlaying: false,
-        frozenVars: [], manualVar: null, manualValue: 0, basis: null, proj: null, ppValue: null, t: 0,
-        keyframes: [], scrubberT: 0, scrubbing: false, ppScoreTrace: [] },
+      activeXVars: [], activeYVars: [],
+      frozenVars: [], manualVar: null, manualValue: 0, basis: null, proj: null, ppValue: null, t: 0,
+      keyframes: [], scrubberT: 0, scrubbing: false, ppScoreTrace: [] },
     })),
 
   setTourSpeed: (speed) => set((s) => ({ tour: { ...s.tour, speed } })),
   setTourShape: (shape: TourShape) => set((s) => {
     if (s.tour.activePanelId == null) return { tour: { ...s.tour, shape } };
-    const want = shape === "2d" ? "scatter" : "dotplot";
+    const want = shape === "2d" || shape === "corr" ? "scatter" : "dotplot";
     const compatible = s.plots.panels.find((p) => p.kind === want);
     if (!compatible) return { tour: { ...s.tour, shape } };
+    let activeXVars = s.tour.activeXVars;
+    let activeYVars = s.tour.activeYVars;
+    if (shape === "corr") {
+      const half = Math.ceil(s.tour.activeVars.length / 2);
+      activeXVars = s.tour.activeVars.slice(0, half);
+      activeYVars = s.tour.activeVars.slice(half);
+    }
     return {
       tour: {
         ...s.tour,
         shape,
         activePanelId: compatible.id,
+        activeXVars,
+        activeYVars,
         basis: null,
         proj: null,
         ppValue: null,
@@ -87,6 +125,18 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
         manualVar,
       },
     };
+  }),
+
+  setTourActiveXVars: (vars) => set((s) => {
+    const activeVars = [...vars, ...s.tour.activeYVars];
+    const frozenVars = s.tour.frozenVars.filter((name) => activeVars.includes(name));
+    return { tour: { ...s.tour, activeXVars: vars, activeVars, frozenVars } };
+  }),
+
+  setTourActiveYVars: (vars) => set((s) => {
+    const activeVars = [...s.tour.activeXVars, ...vars];
+    const frozenVars = s.tour.frozenVars.filter((name) => activeVars.includes(name));
+    return { tour: { ...s.tour, activeYVars: vars, activeVars, frozenVars } };
   }),
 
   toggleTourVarFrozen: (name) => set((s) => {
@@ -126,6 +176,7 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
       shape: t.shape,
       vars: [...t.activeVars],
       basis: new Float64Array(t.basis),
+      ...(t.shape === "corr" ? { xVars: [...t.activeXVars], yVars: [...t.activeYVars] } : {}),
     };
     set((s) => ({
       tour: { ...s.tour, savedViews: [...s.tour.savedViews, view], nextViewId: id + 1 },
@@ -142,6 +193,8 @@ export const createTourSlice: StateCreator<AppStore, [], [], TourSlice> = (set, 
         activePanelId: v.panelId,
         shape: v.shape,
         activeVars: [...v.vars],
+        activeXVars: v.xVars ? [...v.xVars] : s.tour.activeXVars,
+        activeYVars: v.yVars ? [...v.yVars] : s.tour.activeYVars,
         frozenVars: [],
         basis: new Float64Array(v.basis),
         proj: null,

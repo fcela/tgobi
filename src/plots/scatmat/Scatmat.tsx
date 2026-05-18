@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ScatmatPanel } from "@/store/types";
+import type { ScagnosticMeasure } from "@/lib/scagnostics";
 import { useAppStore } from "@/store";
 import { KdTree2D } from "@/lib/brush/kdtree";
 import {
@@ -23,6 +24,7 @@ import {
   type ScatmatLayout,
   type ScatmatEdgeOverlay,
   type ScatmatScagHighlight,
+  type ScatmatBoundaryOverlay,
   type VisualState,
 } from "@/plots/scatmat/scatmatRender";
 
@@ -39,6 +41,7 @@ export function Scatmat({ panel }: ScatmatProps) {
   const colorState = useAppStore((s) => s.color);
   const brush = useAppStore((s) => s.brush);
   const edges = useAppStore((s) => s.edges);
+  const classification = useAppStore((s) => s.classification);
   const activeTool = useAppStore((s) => s.tools.active);
   const pinnedRows = useAppStore((s) => s.tools.pinnedRows);
   const labelVar = useAppStore((s) => s.tools.labelVar);
@@ -50,6 +53,8 @@ export function Scatmat({ panel }: ScatmatProps) {
   const togglePinnedIdentify = useAppStore((s) => s.togglePinnedIdentify);
   const removePanel = useAppStore((s) => s.removePanel);
   const scagnostics = useAppStore((s) => s.scagnostics);
+  const scatmatReorderBy = useAppStore((s) => s.scagnostics.scatmatReorderBy);
+  const scatmatReorderDescending = useAppStore((s) => s.scagnostics.scatmatReorderDescending);
 
   const cardRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -65,17 +70,49 @@ export function Scatmat({ panel }: ScatmatProps) {
   const [alpha, setAlpha] = useState(1);
   const [labels, setLabels] = useState<PinnedLabel[]>([]);
 
-  // Resolved columns for each variable in panel.variables, with scaling applied
+  const reorderedVars = useMemo(() => {
+    if (!scatmatReorderBy || !scagnostics.results) return panel.variables;
+    const vars = panel.variables;
+    const varsSet = new Set(vars);
+    const relevant = scagnostics.results.filter(
+      (r) => varsSet.has(r.xVar) && varsSet.has(r.yVar),
+    );
+    const maxScores = new Map<string, number>();
+    for (const v of vars) {
+      let maxScore = 0;
+      for (const r of relevant) {
+        if (r.xVar === v || r.yVar === v) {
+          const score = r.scores[scatmatReorderBy];
+          if (score > maxScore) maxScore = score;
+        }
+      }
+      maxScores.set(v, maxScore);
+    }
+    const sorted = [...vars].sort((a, b) => {
+      const sa = maxScores.get(a) ?? 0;
+      const sb = maxScores.get(b) ?? 0;
+      return scatmatReorderDescending ? sb - sa : sa - sb;
+    });
+    return sorted;
+  }, [scatmatReorderBy, scatmatReorderDescending, scagnostics.results, panel.variables]);
+
+  const varIndexMap = useMemo(() => {
+    const m = new Map<string, number>();
+    reorderedVars.forEach((v, i) => m.set(v, i));
+    return m;
+  }, [reorderedVars]);
+
+  // Resolved columns for each variable in reorderedVars, with scaling applied
   const cols = useMemo(() => {
     if (!df) return [];
-    return panel.variables.map((v) => {
+    return reorderedVars.map((v) => {
       const c = df.column(v);
       if (!c || (c.type !== "numeric" && c.type !== "integer")) return null;
       const vs = spec.find((s) => s.name === v);
       const resolved = resolveScaledValues(c, vs);
       return { type: c.type as "numeric" | "integer", name: c.name, length: c.length, values: resolved.values, missing: { buffer: resolved.missingBuffer, isMissing: c.missing.isMissing.bind(c.missing) } };
     });
-  }, [df, panel.variables, spec]);
+  }, [df, reorderedVars, spec]);
 
   // Per-row colors
   const colors: ReadonlyArray<string> = useMemo(() => {
@@ -170,7 +207,7 @@ export function Scatmat({ panel }: ScatmatProps) {
 
   const scagHighlight = useMemo<ScatmatScagHighlight | null>(() => {
     if (!scagnostics.results) return null;
-    const vars = panel.variables;
+    const vars = reorderedVars;
     const varsSet = new Set(vars);
     const relevant = scagnostics.results.filter(
       (r) => varsSet.has(r.xVar) && varsSet.has(r.yVar),
@@ -185,12 +222,12 @@ export function Scatmat({ panel }: ScatmatProps) {
       scores,
       threshold: scagnostics.filterThreshold,
     };
-  }, [scagnostics.results, scagnostics.filterMeasure, scagnostics.filterThreshold, panel.variables]);
+  }, [scagnostics.results, scagnostics.filterMeasure, scagnostics.filterThreshold, reorderedVars]);
 
   // Invalidate kd-tree cache when df or variables change
   useEffect(() => {
     treeCache.current.clear();
-  }, [df, panel.variables]);
+  }, [df, reorderedVars]);
 
   // Paint orchestration
   const paintHandle = useRef<number | null>(null);
@@ -212,7 +249,7 @@ export function Scatmat({ panel }: ScatmatProps) {
     const { w, h } = sizeRef.current;
     if (w < 1 || h < 1) return;
 
-    const n = panel.variables.length;
+    const n = reorderedVars.length;
     const layout = computeLayout(w, h, n);
     updatePinnedLabels(layout);
 
@@ -227,7 +264,26 @@ export function Scatmat({ panel }: ScatmatProps) {
       shape: selection.shape,
       shadow: selection.shadow,
       paintPalette,
+      misclassifiedMask: classification.boundariesVisible ? classification.misclassified : null,
     };
+
+    // Pre-compute the boundary grid indices for each scatmat variable. null
+    // means the variable wasn't part of the trained predictors (so cells
+    // involving it skip boundary rendering).
+    const bVars = classification.boundaryVars;
+    const bGrid = classification.boundaryGrid;
+    const bPaint = classification.boundaryPaint;
+    const bProbs = classification.boundaryProbabilities;
+    const boundaryReady =
+      classification.boundariesVisible && !!bVars && !!bGrid && !!bPaint && !!bProbs;
+    const colIdxForVar: Array<number | null> = boundaryReady
+      ? reorderedVars.map((v) => {
+          const k = bVars!.indexOf(v);
+          return k >= 0 ? k : null;
+        })
+      : [];
+    const nVars = bVars?.length ?? 0;
+    const nBoundaryPts = boundaryReady && nVars > 0 ? (bGrid!.length / nVars) | 0 : 0;
 
     const activeBrushCell =
       brush.activePanelId === panel.id ? activeDragCell.current : null;
@@ -242,13 +298,12 @@ export function Scatmat({ panel }: ScatmatProps) {
       for (let j = 0; j < n; j++) {
         const cell = layout.cells[i]![j]!;
         if (i === j) {
-          drawDiagonal(ctx, cell, panel.variables[i]!);
+          drawDiagonal(ctx, cell, reorderedVars[i]!);
           continue;
         }
         const xCol = cols[j];
         const yCol = cols[i];
         if (!xCol || !yCol) {
-          // can't draw — at least draw the frame
           ctx.strokeStyle = "#2a2a2a";
           ctx.lineWidth = 0.5;
           ctx.strokeRect(cell.x + 0.5, cell.y + 0.5, cell.w - 1, cell.h - 1);
@@ -259,6 +314,31 @@ export function Scatmat({ panel }: ScatmatProps) {
           activeBrushCell !== null &&
           activeBrushCell.i === i &&
           activeBrushCell.j === j;
+
+        // Per-cell boundary overlay: pull x/y from boundaryGrid for the two
+        // variables this cell displays. Skip if either variable wasn't a
+        // predictor in the trained model.
+        let cellBoundary: ScatmatBoundaryOverlay | null = null;
+        if (boundaryReady) {
+          const xIdx = colIdxForVar[j];
+          const yIdx = colIdxForVar[i];
+          if (xIdx != null && yIdx != null) {
+            const xs = new Float64Array(nBoundaryPts);
+            const ys = new Float64Array(nBoundaryPts);
+            for (let p = 0; p < nBoundaryPts; p++) {
+              xs[p] = bGrid![p * nVars + xIdx]!;
+              ys[p] = bGrid![p * nVars + yIdx]!;
+            }
+            cellBoundary = {
+              x: xs,
+              y: ys,
+              paint: bPaint!,
+              probabilities: bProbs!,
+              indecisionThreshold: classification.indecisionThreshold,
+              paintPalette,
+            };
+          }
+        }
 
         drawCell(
           ctx,
@@ -271,8 +351,9 @@ export function Scatmat({ panel }: ScatmatProps) {
           isActiveCell ? activeBrushOverlay : null,
           edgeOverlay,
           scagHighlight,
-          panel.variables[j],
-          panel.variables[i],
+          reorderedVars[j],
+          reorderedVars[i],
+          cellBoundary,
         );
 
         // Build kd-tree lazily
@@ -316,7 +397,7 @@ export function Scatmat({ panel }: ScatmatProps) {
   useEffect(() => {
     requestPaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [df, cols, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, edgeOverlay, alpha, pinnedRows, labelVar, scagHighlight]);
+  }, [df, cols, colors, selection, brush.activeRect, brush.activePath, brush.activePanelId, brush.tool, paintPalette, edgeOverlay, alpha, pinnedRows, labelVar, scagHighlight, reorderedVars, classification.boundariesVisible, classification.boundaryGrid, classification.boundaryPaint, classification.boundaryProbabilities, classification.boundaryVars, classification.indecisionThreshold, classification.misclassified]);
 
   // Track which cell the current drag started in
   const activeDragCell = useRef<{ i: number; j: number } | null>(null);
@@ -330,7 +411,7 @@ export function Scatmat({ panel }: ScatmatProps) {
 
   const getCellFromPoint = (px: number, py: number): { i: number; j: number; layout: ScatmatLayout } | null => {
     const { w, h } = sizeRef.current;
-    const n = panel.variables.length;
+    const n = reorderedVars.length;
     const layout = computeLayout(w, h, n);
     const cell = hitCell(layout, px, py);
     if (!cell) return null;
@@ -393,8 +474,8 @@ export function Scatmat({ panel }: ScatmatProps) {
       const hit = identifyRowAt(x, y);
       if (hit) {
         setIdentifyHover(hit.row);
-        const xVar = panel.variables[hit.j]!;
-        const yVar = panel.variables[hit.i]!;
+        const xVar = reorderedVars[hit.j]!;
+        const yVar = reorderedVars[hit.i]!;
         const xCol = cols[hit.j];
         const yCol = cols[hit.i];
         const xv = xCol ? xCol.values[hit.row] : "?";
@@ -416,8 +497,8 @@ export function Scatmat({ panel }: ScatmatProps) {
     if (scagHighlight && !dragRef.current) {
       const hit = getCellFromPoint(x, y);
       if (hit && hit.i !== hit.j) {
-        const xVar = panel.variables[hit.j]!;
-        const yVar = panel.variables[hit.i]!;
+        const xVar = reorderedVars[hit.j]!;
+        const yVar = reorderedVars[hit.i]!;
         const key = `${xVar},${yVar}`;
         const key2 = `${yVar},${xVar}`;
         const score = scagHighlight.scores.get(key) ?? scagHighlight.scores.get(key2);

@@ -26,6 +26,8 @@ export function TourPanel() {
   const setTourMode = useAppStore((s) => s.setTourMode);
   const setTourPpIndex = useAppStore((s) => s.setTourPpIndex);
   const setTourActiveVars = useAppStore((s) => s.setTourActiveVars);
+  const setTourActiveXVars = useAppStore((s) => s.setTourActiveXVars);
+  const setTourActiveYVars = useAppStore((s) => s.setTourActiveYVars);
   const toggleTourVarFrozen = useAppStore((s) => s.toggleTourVarFrozen);
   const setManualVarValue = useAppStore((s) => s.setManualVarValue);
   const saveCurrentView = useAppStore((s) => s.saveCurrentView);
@@ -55,12 +57,24 @@ const hasPaintedGroups = useMemo(() => {
   }, [paint]);
 
   const compatiblePanel = useMemo(() => {
-    const want = tour.shape === "2d" ? "scatter" : "dotplot";
+    const want = tour.shape === "2d" || tour.shape === "corr" ? "scatter" : "dotplot";
     return panels.find((p) => p.kind === want) ?? null;
   }, [panels, tour.shape]);
 
   const onStart = () => {
     if (!compatiblePanel) return;
+    if (tour.shape === "corr") {
+      const xVars = tour.activeXVars.length >= 1
+        ? tour.activeXVars
+        : numericVars.slice(0, Math.max(1, Math.min(3, numericVars.length)));
+      const yVars = tour.activeYVars.length >= 1
+        ? tour.activeYVars
+        : numericVars.slice(xVars.length, Math.max(xVars.length + 1, Math.min(6, numericVars.length)));
+      const allVars = [...xVars, ...yVars];
+      if (allVars.length < 2) return;
+      startTour(compatiblePanel.id, tour.shape, allVars);
+      return;
+    }
     const minVars = 2;
     const vars = tour.activeVars.length >= minVars
       ? tour.activeVars
@@ -72,9 +86,10 @@ const ldaNeedsClass = tour.mode === "pp" && tour.ppIndex === "lda";
 const ldaHasClass = tour.ppIndex === "lda"
   ? (tour.ppClassSource === "paint" ? hasPaintedGroups : catVars.includes(tour.ppClassSource))
   : true;
-const startDisabled = !compatiblePanel
-  || numericVars.length < 2
-  || (ldaNeedsClass && !ldaHasClass);
+  const startDisabled = !compatiblePanel
+    || numericVars.length < 2
+    || (tour.shape === "corr" && numericVars.length < 2)
+    || (ldaNeedsClass && !ldaHasClass);
   const speedSliderValue = SPEED_FRAME_SUM - tour.speed;
 
   const toggleVar = (name: string) => {
@@ -95,15 +110,16 @@ const startDisabled = !compatiblePanel
 
       <div className="row">
         <span>Shape</span>
-        <HelpPopover content={<><p className="help-title">Tour Shape</p><p><b>2D (scatter)</b>: Projects onto a 2D scatter plot — you see both horizontal and vertical axes of the projection. Best for revealing clusters, holes, and 2D structure.</p><p><b>1D (dotplot)</b>: Projects onto a 1D histogram strip — you see a single axis. Simpler but useful for spotting gaps, modes, and skewness along one direction at a time.</p><p><b>When to use each:</b> Start with 2D to get an overview. Switch to 1D if you want to focus on how a single direction separates groups.</p></>} />
+        <HelpPopover content={<><p className="help-title">Tour Shape</p><p><b>2D (scatter)</b>: Projects onto a 2D scatter plot — you see both horizontal and vertical axes of the projection. Best for revealing clusters, holes, and 2D structure.</p><p><b>1D (dotplot)</b>: Projects onto a 1D histogram strip — you see a single axis. Simpler but useful for spotting gaps, modes, and skewness along one direction at a time.</p><p><b>Correlation (2x1D)</b>: Projects two independent variable groups — X variables onto the horizontal axis, Y variables onto the vertical axis. Each axis rotates through its own group independently, revealing correlations between the two sets.</p><p><b>When to use each:</b> Start with 2D to get an overview. Switch to 1D to focus on single directions. Use Correlation when you have two groups of variables and want to explore how they relate.</p></>} />
         <select
           aria-label="tour shape"
           value={tour.shape}
-          onChange={(e) => setTourShape(e.target.value as "1d" | "2d")}
-        >
-          <option value="2d">2D (scatter)</option>
-          <option value="1d">1D (dotplot)</option>
-        </select>
+      onChange={(e) => setTourShape(e.target.value as "1d" | "2d" | "corr")}
+    >
+      <option value="2d">2D (scatter)</option>
+      <option value="1d">1D (dotplot)</option>
+      <option value="corr">Correlation (2x1D)</option>
+    </select>
       </div>
 
       <div className="row">
@@ -188,23 +204,25 @@ const startDisabled = !compatiblePanel
             <select
               aria-label="manual tour variable"
               value={tour.manualVar ?? ""}
-              onChange={(e) => {
-                const name = e.target.value;
-                if (!name) return;
-                const varIndex = tour.activeVars.indexOf(name);
-                const basis = tour.basis;
-                let value = 0.5;
-                if (basis && varIndex >= 0) {
-                  if (tour.shape === "1d") {
-                    value = ((basis[varIndex] ?? 0) + 1) / 2;
-                  } else {
-                    const x = basis[varIndex * 2] ?? 0;
-                    const y = basis[varIndex * 2 + 1] ?? 0;
-                    value = Math.sqrt(x * x + y * y);
-                  }
-                }
-                setManualVarValue(name, value);
-              }}
+          onChange={(e) => {
+            const name = e.target.value;
+            if (!name) return;
+            const varIndex = tour.activeVars.indexOf(name);
+            const basis = tour.basis;
+            let value = 0.5;
+            if (basis && varIndex >= 0) {
+              if (tour.shape === "1d") {
+                value = ((basis[varIndex] ?? 0) + 1) / 2;
+              } else if (tour.shape === "corr") {
+                value = ((basis[varIndex * 2] ?? 0) + 1) / 2;
+              } else {
+                const x = basis[varIndex * 2] ?? 0;
+                const y = basis[varIndex * 2 + 1] ?? 0;
+                value = Math.sqrt(x * x + y * y);
+              }
+            }
+            setManualVarValue(name, value);
+          }}
             >
               <option value="">(select)</option>
               {tour.activeVars.map((v) => <option key={v} value={v}>{v}</option>)}
@@ -292,21 +310,28 @@ const startDisabled = !compatiblePanel
         </>
       )}
 
+  {tour.shape === "corr" ? (
+    <>
       <div className="row vars-row">
-        <HelpPopover content={<><p className="help-title">Tour Variables</p><p>Choose which variables participate in the tour. The tour projects from the full p-dimensional space of checked variables down to 1D or 2D.</p><p><b>How many?</b> Include at least 3 for a meaningful tour; 5-10 gives the best balance of structure and interpretability. Too many variables can make the tour noisy.</p><p><b>Phase bar</b>: The small bar next to each active variable shows its current direction and magnitude in the projection. The position indicates the variable's contribution angle; the further from center, the stronger its influence.</p><p><b>Freeze</b>: Click the phase bar to lock a variable's contribution so it stays fixed while the rest of the tour moves. This is useful for holding a known structure in place while exploring around it.</p></>} />
-        <div className="vars" aria-label="tour variables">
-          {numericVars.length === 0 && <span style={{ color: "var(--text-dim)" }}>none</span>}
+        <HelpPopover content={<><p className="help-title">Correlation Tour X Variables</p><p>The <b>X variables</b> are projected onto the horizontal axis. The tour independently rotates through linear combinations of these variables, showing different 1D views on the x-axis.</p><p><b>How many?</b> Include at least 1 X variable; 2-5 gives the best interpretability. Too many variables dilute the signal.</p><p><b>Freeze</b>: Click the phase bar to lock a variable's contribution so it stays fixed while the rest rotate.</p></>} />
+        <span className="vars-label">X vars</span>
+        <div className="vars" aria-label="tour X variables">
           {numericVars.map((n) => {
-            const varIndex = tour.activeVars.indexOf(n);
+            const varIndex = tour.activeXVars.indexOf(n);
             const isActive = varIndex >= 0;
             const frozen = tour.frozenVars.includes(n);
             return (
               <div key={n} className={isActive ? "var-row active" : "var-row"}>
                 <input
                   type="checkbox"
-                  aria-label={`include ${n} in tour`}
+                  aria-label={`include ${n} in X tour`}
                   checked={isActive}
-                  onChange={() => toggleVar(n)}
+                  onChange={() => {
+                    const has = tour.activeXVars.includes(n);
+                    setTourActiveXVars(has
+                      ? tour.activeXVars.filter((v) => v !== n)
+                      : [...tour.activeXVars, n]);
+                  }}
                 />
                 <span className="name">{n}</span>
                 {isActive && (
@@ -330,6 +355,92 @@ const startDisabled = !compatiblePanel
           })}
         </div>
       </div>
+      <div className="row vars-row">
+        <HelpPopover content={<><p className="help-title">Correlation Tour Y Variables</p><p>The <b>Y variables</b> are projected onto the vertical axis. The tour independently rotates through linear combinations of these variables, showing different 1D views on the y-axis.</p><p>As the X and Y axes rotate independently, you can discover which combinations of X and Y variables produce interesting correlations — clusters, trends, or nonlinear patterns.</p></>} />
+        <span className="vars-label">Y vars</span>
+        <div className="vars" aria-label="tour Y variables">
+          {numericVars.map((n) => {
+            const varIndex = tour.activeYVars.indexOf(n);
+            const isActive = varIndex >= 0;
+            const frozen = tour.frozenVars.includes(n);
+            const xHas = tour.activeXVars.includes(n);
+            return (
+              <div key={n} className={isActive ? "var-row active" : "var-row"}>
+                <input
+                  type="checkbox"
+                  aria-label={`include ${n} in Y tour`}
+                  checked={isActive}
+                  disabled={xHas}
+                  onChange={() => {
+                    const has = tour.activeYVars.includes(n);
+                    setTourActiveYVars(has
+                      ? tour.activeYVars.filter((v) => v !== n)
+                      : [...tour.activeYVars, n]);
+                  }}
+                />
+                <span className="name" style={xHas ? { opacity: 0.4 } : undefined}>{n}</span>
+                {isActive && (
+                  <button
+                    type="button"
+                    className={frozen ? "tour-phase frozen" : "tour-phase"}
+                    aria-label={`${frozen ? "release" : "freeze"} ${n}`}
+                    title={frozen ? "release variable" : "freeze variable"}
+                    onClick={() => toggleTourVarFrozen(n)}
+                  >
+                    <span className="tour-phase-track">
+                      <span
+                        className="tour-phase-thumb"
+                        style={{ left: `${tourVariablePhase(tour.basis, tour.shape, tour.activeXVars.length + varIndex) * 100}%` }}
+                      />
+                    </span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  ) : (
+    <div className="row vars-row">
+      <HelpPopover content={<><p className="help-title">Tour Variables</p><p>Choose which variables participate in the tour. The tour projects from the full p-dimensional space of checked variables down to 1D or 2D.</p><p><b>How many?</b> Include at least 3 for a meaningful tour; 5-10 gives the best balance of structure and interpretability. Too many variables can make the tour noisy.</p><p><b>Phase bar</b>: The small bar next to each active variable shows its current direction and magnitude in the projection. The position indicates the variable's contribution angle; the further from center, the stronger its influence.</p><p><b>Freeze</b>: Click the phase bar to lock a variable's contribution so it stays fixed while the rest of the tour moves. This is useful for holding a known structure in place while exploring around it.</p></>} />
+      <div className="vars" aria-label="tour variables">
+        {numericVars.length === 0 && <span style={{ color: "var(--text-dim)" }}>none</span>}
+        {numericVars.map((n) => {
+          const varIndex = tour.activeVars.indexOf(n);
+          const isActive = varIndex >= 0;
+          const frozen = tour.frozenVars.includes(n);
+          return (
+            <div key={n} className={isActive ? "var-row active" : "var-row"}>
+              <input
+                type="checkbox"
+                aria-label={`include ${n} in tour`}
+                checked={isActive}
+                onChange={() => toggleVar(n)}
+              />
+              <span className="name">{n}</span>
+              {isActive && (
+                <button
+                  type="button"
+                  className={frozen ? "tour-phase frozen" : "tour-phase"}
+                  aria-label={`${frozen ? "release" : "freeze"} ${n}`}
+                  title={frozen ? "release variable" : "freeze variable"}
+                  onClick={() => toggleTourVarFrozen(n)}
+                >
+                  <span className="tour-phase-track">
+                    <span
+                      className="tour-phase-thumb"
+                      style={{ left: `${tourVariablePhase(tour.basis, tour.shape, varIndex) * 100}%` }}
+                    />
+                  </span>
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  )}
 
       <div className="row">
         <span>Speed</span>
@@ -383,10 +494,13 @@ function formatTourDuration(frames: number): string {
   return `${Math.max(1, Math.round(frames / 60))}s`;
 }
 
-function tourVariablePhase(basis: Float64Array | null, shape: "1d" | "2d", row: number): number {
+function tourVariablePhase(basis: Float64Array | null, shape: "1d" | "2d" | "corr", row: number): number {
   if (!basis) return 0.5;
   if (shape === "1d") {
     return clamp01(((basis[row] ?? 0) + 1) / 2);
+  }
+  if (shape === "corr") {
+    return clamp01(((basis[row * 2] ?? 0) + 1) / 2);
   }
 
   const x = basis[row * 2] ?? 0;

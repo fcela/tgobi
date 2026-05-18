@@ -5,5 +5,11 @@ export interface ClassificationResult {
   nClasses: number;
   sizes: number[];
   featureImportance?: number[];
-  probabilities?: Float32Array;
+  /**
+   * Per-prediction × per-class probability, row-major
+   * (length = predictions.length × nClasses). Each row sums to ~1.
+   * Always populated by every classifier (the per-method probability
+   * derivation is documented in that classifier's file).
+   */
+  probabilities: Float32Array;
 }
