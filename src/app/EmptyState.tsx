@@ -7,13 +7,13 @@ export interface EmptyStateProps {
 }
 
 const SAMPLES = [
-  { label: "flea", url: "/samples/flea.csv" },
-  { label: "olive", url: "/samples/olive.csv" },
-  { label: "places", url: "/samples/places.csv" },
-  { label: "cycle", url: "/samples/cycle.xml" },
-  { label: "large", url: "/samples/synthetic-large.csv" },
-  { label: "climate", url: "/samples/climate.csv" },
-  { label: "missing", url: "/samples/missing.csv" },
+  { label: "flea", url: `${import.meta.env.BASE_URL}samples/flea.csv` },
+  { label: "olive", url: `${import.meta.env.BASE_URL}samples/olive.csv` },
+  { label: "places", url: `${import.meta.env.BASE_URL}samples/places.csv` },
+  { label: "cycle", url: `${import.meta.env.BASE_URL}samples/cycle.xml` },
+  { label: "large", url: `${import.meta.env.BASE_URL}samples/synthetic-large.csv` },
+  { label: "climate", url: `${import.meta.env.BASE_URL}samples/climate.csv` },
+  { label: "missing", url: `${import.meta.env.BASE_URL}samples/missing.csv` },
 ];
 
 export function EmptyState({ onLoaded }: EmptyStateProps) {

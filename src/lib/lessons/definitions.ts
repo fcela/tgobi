@@ -19,7 +19,7 @@ export const LESSONS: LessonDef[] = [
     id: "flea-brushing-tour",
     title: "Brushing & Tours with Flea Beetles",
     description: "Learn the core workflow: load data, brush groups, run a grand tour, then use projection pursuit to find separating views.",
-    dataset: "/samples/flea.csv",
+    dataset: `${import.meta.env.BASE_URL}samples/flea.csv`,
     steps: [
       {
         title: "Welcome",
@@ -60,7 +60,7 @@ export const LESSONS: LessonDef[] = [
     id: "olive-lda-classify",
     title: "LDA & Classification with Olive Oils",
     description: "Use projection pursuit LDA and classifiers to separate Italian olive oil regions by fatty acid composition.",
-    dataset: "/samples/olive.csv",
+    dataset: `${import.meta.env.BASE_URL}samples/olive.csv`,
     steps: [
       {
         title: "Welcome",
@@ -95,7 +95,7 @@ export const LESSONS: LessonDef[] = [
     id: "missing-imputation",
     title: "Missing Data & Imputation Uncertainty",
     description: "Explore missing data patterns and see how different imputation methods change the picture.",
-    dataset: "/samples/missing.csv",
+    dataset: `${import.meta.env.BASE_URL}samples/missing.csv`,
     steps: [
       {
         title: "Welcome",
@@ -129,7 +129,7 @@ export const LESSONS: LessonDef[] = [
     id: "synthetic-scag-cluster",
     title: "Scagnostics & Clustering on Synthetic Data",
     description: "Use scagnostics to screen for interesting pairs, then cluster to find groups automatically.",
-    dataset: "/samples/synthetic-large.csv",
+    dataset: `${import.meta.env.BASE_URL}samples/synthetic-large.csv`,
     steps: [
       {
         title: "Welcome",
