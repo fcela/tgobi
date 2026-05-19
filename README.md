@@ -5,7 +5,7 @@ Interactive high-dimensional data visualization in the browser, inspired by
 clustering, classification, and dimensionality reduction --- all without leaving
 your browser.
 
-**[Try it live →](https://fcela.github.io/tgobi/)**
+**[Give it a spin →](https://fcela.github.io/tgobi/)**
 
 ![tgobi: linked brushing, grand tour, parallel coordinates, and barcharts](docs/screenshots/tour-parcoords-barchart-selection.png)
 
